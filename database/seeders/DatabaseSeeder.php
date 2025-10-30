@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Models\ImportedLines;
 use App\Models\User;
 // use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
@@ -25,6 +26,10 @@ class DatabaseSeeder extends Seeder
             'name' => 'Vanessa Nazaro',
             'email' => 'drh@dalferinox.com.br',
             'password' => bcrypt('super'),
+        ]);
+
+        ImportedLines::create([
+            'line_number' => 9,
         ]);
     }
 }

@@ -1,19 +1,47 @@
 <div class="space-y-4">
     <div class="flex items-center justify-between">
-        <h1 class="text-2xl font-semibold">Funcionários</h1>
-        <x-ui-button href="{{ route('employees.create') }}">Adicionar Funcionário</x-ui-button>
+        <div class="flex items-center space-x-2">
+            <x-ui-icon name="user-group" class="w-5 h-5" />
+            <span class="text-2xl font-semibold">Funcionários</span>
+        </div>
+        <div class="flex items-center space-x-4">
+            <form wire:submit="importPoints" class="flex items-center space-x-2">
+                <div class="relative">
+                    <input type="file" 
+                        wire:model="file" 
+                        class="border p-2 rounded file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:bg-blue-500 file:text-white hover:file:bg-blue-600"
+                        accept=".txt"
+                        {{ $importing ? 'disabled' : '' }}
+                    >
+                    @error('file') 
+                        <span class="text-red-500 text-sm block mt-1">{{ $message }}</span> 
+                    @enderror
+                </div>
+                <x-ui-button 
+                    :label="$importing ? 'Importando...' : 'Importar Pontos'" 
+                    secondary 
+                    icon="arrow-down-on-square" 
+                    type="submit"
+                    :disabled="$importing"
+                    class="bg-blue-500 text-white rounded px-4 py-2" 
+                />
+            </form>
+        </div>
+        <div>
+            <x-ui-button icon="plus" href="{{ route('employees.create') }}">Adicionar Funcionário</x-ui-button>
+        </div>
     </div>
 
-    <div class="flex space-x-4">
-        <x-ui-input label="Filtra" type="search" wire:model.live="search" placeholder="Filtrar por Nome | PIS | Função" />
+    <div class="flex space-x-4 mt-6">
+        <x-ui-input label="Filtrar Funcionários" type="search" wire:model.live="search" placeholder="Filtrar por Nome | PIS | Função" />
         <x-ui-select wire:model.live="filterEmployee" :options="[
             ['name' => 'Ativos', 'id' => 'without_recision_date'],
             ['name' => 'Inativos', 'id' => 'with_recision_date'],
             ]" option-label='name' option-value="id" label="Filtrar Funcionários" />
     </div>
 
-    <div>
-        <table class="table-auto w-full border-collapse border border-gray-200">
+    <div class="overflow-x-auto">
+        <table class="table-auto w-full border-collapse border border-gray-200 mt-6">
             <thead>
                 <tr>
                     <th class="uppercase">Nome</th>
@@ -37,8 +65,9 @@
                             @endif
                         </td>
                         <td class="flex justify-center gap-2 p-2">
-                            <x-ui-button sm href="{{ route('employees.edit', $employee) }}">Editar</x-ui-button>
-                            <x-ui-button sm red wire:click="destroy({{ $employee }})" wire:confirm="Confirma excluir registro?">Excluir</x-ui-button>
+                            <x-ui-button sm fuchsia wire:click="horasExtras({{ $employee }})"><x-ui-icon name="clock" class="w-4 h-4" />Horas</x-ui-button>
+                            <x-ui-button sm href="{{ route('employees.edit', $employee) }}"><x-ui-icon name="pencil" class="w-4 h-4" />Editar</x-ui-button>
+                            <x-ui-button sm red wire:click="destroy({{ $employee }})" wire:confirm="Confirma excluir registro?"><x-ui-icon name="trash" class="w-4 h-4" />Excluir</x-ui-button>
                         </td>
                     </tr>
                 @endforeach
