@@ -12,23 +12,23 @@ class EmployeeCreate extends Component
 
     public $name;
     public $pis;
-    public $recision_date;
+    public $position;
 
-    public function save()
+    public function createEmployee()
     {
         $this->validate([
             'name' => 'required|string|max:255',
             'pis' => 'required|string|max:20|unique:employees,pis',
-            'recision_date' => 'nullable|date',
+            'position' => 'required|string|max:255',
         ]);
 
         Employee::create([
             'name' => $this->name,
             'pis' => $this->pis,
-            'recision_date' => $this->recision_date,
+            'position' => $this->position,
         ]);
 
-        $this->reset(['name', 'pis', 'recision_date']);
+        $this->reset(['name', 'pis', 'position']);
 
         $this->notification()->success(
             $title = 'Funcionário Criado',

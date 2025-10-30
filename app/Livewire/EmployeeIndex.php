@@ -15,6 +15,26 @@ class EmployeeIndex extends Component
     public $search;
     public $filterEmployee = 'without_recision_date';
 
+    public function updatingSearch()
+    {
+        $this->resetPage();
+    }
+
+    public function updatingFilterEmployee()
+    {
+        $this->resetPage();
+    }
+
+    public function destroy(Employee $employee)
+    {
+        $employee->delete();
+
+        $this->notification()->success(
+            $title = 'Funcionário Excluído',
+            $description = 'O funcionário foi excluído com sucesso.'
+        );
+    }   
+
     public function render()
     {
         $employees = Employee::query()

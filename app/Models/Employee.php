@@ -10,9 +10,8 @@ class Employee extends Model
     protected $fillable = [
         'pis',
         'name',
-        'email',
         'position',
-        'is_active',
+        'recision_date',
     ];
 
     public function points(): HasMany

@@ -38,7 +38,7 @@
                         </td>
                         <td class="flex justify-center gap-2 p-2">
                             <x-ui-button sm href="{{ route('employees.edit', $employee) }}">Editar</x-ui-button>
-                            <x-ui-button sm red wire:click="destroy">Excluir</x-ui-button>
+                            <x-ui-button sm red wire:click="destroy({{ $employee }})" wire:confirm="Confirma excluir registro?">Excluir</x-ui-button>
                         </td>
                     </tr>
                 @endforeach
