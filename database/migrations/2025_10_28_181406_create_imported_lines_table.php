@@ -11,12 +11,9 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('employees', function (Blueprint $table) {
+        Schema::create('imported_lines', function (Blueprint $table) {
             $table->id();
-            $table->string('pis');
-            $table->string('name');
-            $table->string('position');
-            $table->dateTime('recision_date')->nullable();
+            $table->integer('line_number');
             $table->timestamps();
         });
     }
@@ -26,6 +23,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('employees');
+        Schema::dropIfExists('imported_lines');
     }
 };

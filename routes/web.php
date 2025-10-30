@@ -32,6 +32,10 @@ Route::middleware(['auth'])->group(function () {
             ),
         )
         ->name('two-factor.show');
+    
+    Route::get('employees', \App\Livewire\EmployeeIndex::class)->name('employees.index');
+    Route::get('employees/create', \App\Livewire\EmployeeCreate::class)->name('employees.create');
+    Route::get('employees/{employee}/edit', \App\Livewire\EmployeeEdit::class)->name('employees.edit');
 });
 
 require __DIR__.'/auth.php';
