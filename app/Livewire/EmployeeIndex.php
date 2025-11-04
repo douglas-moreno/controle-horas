@@ -9,6 +9,7 @@ use Livewire\Component;
 use Livewire\WithFileUploads;
 use Livewire\WithPagination;
 use WireUi\Traits\WireUiActions;
+use Carbon\Carbon;
 
 class EmployeeIndex extends Component
 {
@@ -74,24 +75,31 @@ class EmployeeIndex extends Component
                 if (empty($line)) continue;
 
                 try {
-                    $data = substr($line, 10, 8);
+                    $data = substr($line, 10, 8); // ex: "29112017"
                     $hora = substr($line, 18, 4);
                     $pis = substr($line, 23, 12);
 
-                    $data = date('Ymd', strtotime($data));
+                    // Converte corretamente "dmY" -> "Y-m-d"
+                    $dt = Carbon::createFromFormat('dmY', $data);
+                    if (! $dt || $dt->format('dmY') !== $data) {
+                        // formato inválido, pula
+                        continue;
+                    }
+                    $formattedDate = $dt->format('Y-m-d');
+
                     $hora = substr($hora, 0, 2) . ':' . substr($hora, 2, 2) . ':00';
 
                     $importedPoints[] = [
-                        'date' => trim($data),
+                        'date' => $formattedDate,
                         'time' => trim($hora),
-                        'employee_id' => trim($pis),
+                        'pis' => (int)trim($pis),
+                        'type' => 'importado',
                     ];
                     $counter++;
                 } catch (\Exception $e) {
                     continue; // pula linhas com formato inválido
                 }
             }
-
             if (count($importedPoints) > 0) {
                 Point::insert($importedPoints);
                 ImportedLines::create([

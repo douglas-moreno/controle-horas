@@ -13,7 +13,7 @@ return new class extends Migration
     {
         Schema::create('points', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('employee_id')->constrained('employees')->onDelete('cascade');
+            $table->integer('pis')->nullable();
             $table->date('date')->nullable();
             $table->time('time')->nullable();
             $table->string('type')->nullable();

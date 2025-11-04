@@ -16,6 +16,6 @@ class Employee extends Model
 
     public function points(): HasMany
     {
-        return $this->hasMany(Point::class);
+        return $this->hasMany(Point::class, 'pis', 'pis');
     }
 }
