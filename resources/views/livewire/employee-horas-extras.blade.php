@@ -8,16 +8,25 @@
             <x-ui-button href="{{ route('employees.index') }}" icon="arrow-left">Voltar para Funcionários</x-ui-button>
         </div>
     </div>
-    <div class="bg-white shadow rounded-lg p-6">
-        @php
-            // Agrupa pontos por data (formato Y-m-d) e ordena os grupos por data
-            $groups = $employee->points
-                        ->sortBy(function($p){ return \Illuminate\Support\Carbon::parse($p->date)->format('Y-m-d') . ' ' . ($p->time ?? ''); })
-                        ->groupBy(function($p){
-                            return \Illuminate\Support\Carbon::parse($p->date)->format('Y-m-d');
-                        });
-        @endphp
 
+    <div class="flex space-x-4 mb-4">
+        <x-ui-datetime-picker
+            label="Data Inicial"
+            wire:model.live="startDate"
+            without-time
+            display-format="DD/MM/YYYY"
+            timezone="America/Sao_Paulo"
+        />
+        <x-ui-datetime-picker
+            label="Data Final"
+            wire:model.live="endDate"
+            without-time
+            display-format="DD/MM/YYYY"
+            timezone="America/Sao_Paulo"
+        />
+    </div>
+
+    <div class="bg-white shadow rounded-lg p-6">
         <table class="table-auto w-full border-collapse border border-gray-200">
             <thead>
                 <tr>
@@ -36,20 +45,15 @@
                 @else
                     @foreach($groups as $date => $points)
                         @php
-                            // Ordena horários e atribui às colunas, deixando vazias quando ausentes
-                            $times = $points->sortBy('time')->pluck('time')->values();
-                            $entrada = $times->get(0) ?? '';
-                            $almoco_inicio = $times->get(1) ?? '';
-                            $almoco_fim = $times->get(2) ?? '';
-                            $saida = $times->get(3) ?? '';
+                            $times = $formatTimeValues($points);
                             $displayDate = \Illuminate\Support\Carbon::parse($date)->format('d/m/Y');
                         @endphp
                         <tr class="border-t border-gray-200">
                             <td class="text-lg p-2">{{ $displayDate }}</td>
-                            <td class="text-lg p-2">{{ $entrada }}</td>
-                            <td class="text-lg p-2">{{ $almoco_inicio }}</td>
-                            <td class="text-lg p-2">{{ $almoco_fim }}</td>
-                            <td class="text-lg p-2">{{ $saida }}</td>
+                            <td class="text-lg p-2">{{ $times['entrada'] }}</td>
+                            <td class="text-lg p-2">{{ $times['almoco_inicio'] }}</td>
+                            <td class="text-lg p-2">{{ $times['almoco_fim'] }}</td>
+                            <td class="text-lg p-2">{{ $times['saida'] }}</td>
                         </tr>
                     @endforeach
                 @endif

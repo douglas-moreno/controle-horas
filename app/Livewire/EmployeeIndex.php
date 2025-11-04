@@ -50,69 +50,78 @@ class EmployeeIndex extends Component
     public function importPoints()
     {
         try {
+            ini_set('memory_limit', '512M');
             $this->importing = true;
             
-            // Remove validação de tamanho e tipo
             $this->validate([
                 'file' => 'required|file'
             ]);
 
-            // Usar método alternativo de leitura
-            if ($this->file) {
-                $contents = $this->file->get();
-                $lines = explode("\n", $contents);
-                $importedPoints = [];
-                $totalLines = ImportedLines::query()->orderBy('line_number', 'desc')->first();
-                $startLine = $totalLines ? $totalLines->line_number : 9; // começa da linha 10 se não houver registros
-                $counter = 0;
+            if (!$this->file) {
+                return;
+            }
 
-                for ($i = $startLine; $i < count($lines); $i++) {
-                    $line = $lines[$i];
-                    if (empty($line)) continue;
+            $handle = fopen($this->file->path(), 'r');
+            $totalLines = ImportedLines::query()->orderBy('line_number', 'desc')->first();
+            $startLine = $totalLines ? $totalLines->line_number : 9;
+            $counter = 0;
+            $batch = [];
+            $batchSize = 1000; // processa 1000 registros por vez
 
-                    try {
-                        $data = substr($line, 10, 8); // ex: "29112017"
-                        $hora = substr($line, 18, 4);
-                        $pis = substr($line, 23, 12);
+            // Pula as linhas já importadas
+            for ($i = 0; $i < $startLine; $i++) {
+                fgets($handle);
+            }
 
-                        // Converte corretamente "dmY" -> "Y-m-d"
-                        $dt = Carbon::createFromFormat('dmY', $data);
-                        if (! $dt || $dt->format('dmY') !== $data) {
-                            // formato inválido, pula
-                            continue;
-                        }
-                        $formattedDate = $dt->format('Y-m-d');
+            while (!feof($handle)) {
+                $line = fgets($handle);
+                if (empty($line)) continue;
 
-                        $hora = substr($hora, 0, 2) . ':' . substr($hora, 2, 2) . ':00';
+                try {
+                    $data = substr($line, 10, 8);
+                    $hora = substr($line, 18, 4);
+                    $pis = substr($line, 23, 12);
 
-                        $importedPoints[] = [
-                            'date' => $formattedDate,
-                            'time' => trim($hora),
-                            'pis' => (int)trim($pis),
-                            'type' => 'importado',
-                        ];
-                        $counter++;
-                    } catch (\Exception $e) {
-                        continue; // pula linhas com formato inválido
+                    $dt = Carbon::createFromFormat('dmY', $data);
+                    $formattedDate = $dt->format('Y-m-d');
+                    $hora = substr($hora, 0, 2) . ':' . substr($hora, 2, 2) . ':00';
+
+                    $batch[] = [
+                        'date' => $formattedDate,
+                        'time' => trim($hora),
+                        'pis' => trim($pis),
+                        'type' => 'importado',
+                        'created_at' => now(),
+                        'updated_at' => now()
+                    ];
+                    
+                    $counter++;
+
+                    // Insere em lotes para economizar memória
+                    if (count($batch) >= $batchSize) {
+                        Point::insert($batch);
+                        $batch = [];
                     }
-                }
-                if (count($importedPoints) > 0) {
-                    Point::insert($importedPoints);
-                    ImportedLines::create([
-                        'line_number' => $startLine + $counter,
-                    ]);
-
-                    $this->notification()->success(
-                        $title = 'Importação Concluída',
-                        $description = count($importedPoints) . ' novos pontos importados com sucesso.'
-                    );
-                } else {
-                    $this->notification()->warning(
-                        $title = 'Nenhum Registro',
-                        $description = 'Nenhum novo registro encontrado para importar.'
-                    );
+                } catch (\Exception $e) {
+                    continue;
                 }
             }
+
+            // Insere o último lote
+            if (!empty($batch)) {
+                Point::insert($batch);
+            }
+
+            fclose($handle);
+
+            ImportedLines::create([
+                'line_number' => $startLine + $counter,
+            ]);
+
+            $this->notification()->success(
+                $title = 'Importação Concluída',
+                $description = $counter . ' novos pontos importados com sucesso.'
+            );
 
         } catch (\Exception $e) {
             $this->notification()->error(
