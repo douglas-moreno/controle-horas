@@ -53,8 +53,12 @@ class EmployeeIndex extends Component
             ini_set('memory_limit', '512M');
             $this->importing = true;
             
+            // pega o limite do .env (em MB) e converte para KB para a regra 'max:'
+            $maxMb = (int) env('LIVEWIRE_UPLOAD_MAX_FILESIZE', 50); // ex: 100
+            $maxKb = $maxMb * 1024;
+
             $this->validate([
-                'file' => 'required|file'
+                'file' => 'required|file|mimetypes:text/plain|max:' . $maxKb
             ]);
 
             if (!$this->file) {
