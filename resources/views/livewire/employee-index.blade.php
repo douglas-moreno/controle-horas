@@ -5,12 +5,11 @@
             <span class="text-2xl font-semibold">Funcionários</span>
         </div>
         <div class="flex items-center space-x-4">
-            <form wire:submit="importPoints" class="flex items-center space-x-2">
+            <form wire:submit.prevent="importPoints" class="flex items-center space-x-2">
                 <div class="relative">
                     <input type="file" 
                         wire:model="file" 
                         class="border p-2 rounded file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:bg-blue-500 file:text-white hover:file:bg-blue-600"
-                        accept=".txt"
                         {{ $importing ? 'disabled' : '' }}
                     >
                     <div wire:loading wire:target="file">

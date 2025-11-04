@@ -52,75 +52,72 @@ class EmployeeIndex extends Component
         try {
             $this->importing = true;
             
+            // Remove validação de tamanho e tipo
             $this->validate([
-                'file' => 'required|file|mimetypes:text/plain|max:10240' // 10MB max
+                'file' => 'required|file'
             ]);
 
-            if (!$this->file) {
-                $this->notification()->error(
-                    $title = 'Erro na Importação',
-                    $description = 'Selecione um arquivo para importar.'
-                );
-                return;
-            }
+            // Usar método alternativo de leitura
+            if ($this->file) {
+                $contents = $this->file->get();
+                $lines = explode("\n", $contents);
+                $importedPoints = [];
+                $totalLines = ImportedLines::query()->orderBy('line_number', 'desc')->first();
+                $startLine = $totalLines ? $totalLines->line_number : 9; // começa da linha 10 se não houver registros
+                $counter = 0;
 
-            $lines = file($this->file->path(), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-            $importedPoints = [];
-            $totalLines = ImportedLines::query()->orderBy('line_number', 'desc')->first();
-            $startLine = $totalLines ? $totalLines->line_number : 9; // começa da linha 10 se não houver registros
-            $counter = 0;
+                for ($i = $startLine; $i < count($lines); $i++) {
+                    $line = $lines[$i];
+                    if (empty($line)) continue;
 
-            for ($i = $startLine; $i < count($lines); $i++) {
-                $line = $lines[$i];
-                if (empty($line)) continue;
+                    try {
+                        $data = substr($line, 10, 8); // ex: "29112017"
+                        $hora = substr($line, 18, 4);
+                        $pis = substr($line, 23, 12);
 
-                try {
-                    $data = substr($line, 10, 8); // ex: "29112017"
-                    $hora = substr($line, 18, 4);
-                    $pis = substr($line, 23, 12);
+                        // Converte corretamente "dmY" -> "Y-m-d"
+                        $dt = Carbon::createFromFormat('dmY', $data);
+                        if (! $dt || $dt->format('dmY') !== $data) {
+                            // formato inválido, pula
+                            continue;
+                        }
+                        $formattedDate = $dt->format('Y-m-d');
 
-                    // Converte corretamente "dmY" -> "Y-m-d"
-                    $dt = Carbon::createFromFormat('dmY', $data);
-                    if (! $dt || $dt->format('dmY') !== $data) {
-                        // formato inválido, pula
-                        continue;
+                        $hora = substr($hora, 0, 2) . ':' . substr($hora, 2, 2) . ':00';
+
+                        $importedPoints[] = [
+                            'date' => $formattedDate,
+                            'time' => trim($hora),
+                            'pis' => (int)trim($pis),
+                            'type' => 'importado',
+                        ];
+                        $counter++;
+                    } catch (\Exception $e) {
+                        continue; // pula linhas com formato inválido
                     }
-                    $formattedDate = $dt->format('Y-m-d');
-
-                    $hora = substr($hora, 0, 2) . ':' . substr($hora, 2, 2) . ':00';
-
-                    $importedPoints[] = [
-                        'date' => $formattedDate,
-                        'time' => trim($hora),
-                        'pis' => (int)trim($pis),
-                        'type' => 'importado',
-                    ];
-                    $counter++;
-                } catch (\Exception $e) {
-                    continue; // pula linhas com formato inválido
                 }
-            }
-            if (count($importedPoints) > 0) {
-                Point::insert($importedPoints);
-                ImportedLines::create([
-                    'line_number' => $startLine + $counter,
-                ]);
+                if (count($importedPoints) > 0) {
+                    Point::insert($importedPoints);
+                    ImportedLines::create([
+                        'line_number' => $startLine + $counter,
+                    ]);
 
-                $this->notification()->success(
-                    $title = 'Importação Concluída',
-                    $description = count($importedPoints) . ' novos pontos importados com sucesso.'
-                );
-            } else {
-                $this->notification()->warning(
-                    $title = 'Nenhum Registro',
-                    $description = 'Nenhum novo registro encontrado para importar.'
-                );
+                    $this->notification()->success(
+                        $title = 'Importação Concluída',
+                        $description = count($importedPoints) . ' novos pontos importados com sucesso.'
+                    );
+                } else {
+                    $this->notification()->warning(
+                        $title = 'Nenhum Registro',
+                        $description = 'Nenhum novo registro encontrado para importar.'
+                    );
+                }
             }
 
         } catch (\Exception $e) {
             $this->notification()->error(
                 $title = 'Erro na Importação',
-                $description = 'Ocorreu um erro ao processar o arquivo. ' . $e->getMessage()
+                $description = $e->getMessage()
             );
         } finally {
             $this->importing = false;
