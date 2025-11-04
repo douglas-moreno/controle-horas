@@ -3,13 +3,13 @@
 return [
     'temporary_file_upload' => [
         'disk' => 'local',
-        'rules' => 'file|mimes:txt|max:10240', // 10MB max
+        'rules' => null,         // Remove restrições padrão
         'directory' => 'livewire-tmp',
         'middleware' => null,
         'preview_mimes' => [
             'txt'
         ],
-        'max_upload_time' => 5
+        'max_upload_time' => 60  // Aumenta tempo máximo
     ],
-    'upload_max_filesize' => '10M'
+    'upload_max_filesize' => '50M'  // Aumenta limite
 ];
