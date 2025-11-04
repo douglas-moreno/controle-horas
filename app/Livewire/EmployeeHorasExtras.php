@@ -80,13 +80,54 @@ class EmployeeHorasExtras extends Component
 
     private function formatTimeValues($points): array
     {
-        $times = collect($points)->sortBy('time')->pluck('time')->values();
+        $times = collect($points)
+            ->sortBy('time')
+            ->pluck('time')
+            ->values();
+
+        $count = $times->count();
+
+        // Helper para formatar hora (retorna '' se vazio)
+        $fmt = function ($value) {
+            if (empty($value)) {
+                return '';
+            }
+            try {
+                return Carbon::parse($value)->format('H:i');
+            } catch (\Throwable $e) {
+                return (string) $value;
+            }
+        };
+
+        $entrada = '';
+        $almoco_inicio = '';
+        $almoco_fim = '';
+        $saida = '';
+
+        if ($count === 1) {
+            $entrada = $fmt($times->get(0));
+        } elseif ($count === 2) {
+            // Primeiro -> Entrada, Segundo -> Saída (pula almoço)
+            $entrada = $fmt($times->get(0));
+            $saida = $fmt($times->get(1));
+        } elseif ($count === 3) {
+            // Entrada, Almoço Início, Saída
+            $entrada = $fmt($times->get(0));
+            $almoco_inicio = $fmt($times->get(1));
+            $saida = $fmt($times->get(2));
+        } elseif ($count >= 4) {
+            // Entrada, Almoço Início, Almoço Fim, Saída (apenas os primeiros 4)
+            $entrada = $fmt($times->get(0));
+            $almoco_inicio = $fmt($times->get(1));
+            $almoco_fim = $fmt($times->get(2));
+            $saida = $fmt($times->get(3));
+        }
 
         return [
-            'entrada' => $times->get(0) ? Carbon::parse($times->get(0))->format('H:i') : '',
-            'almoco_inicio' => $times->get(1) ? Carbon::parse($times->get(1))->format('H:i') : '',
-            'almoco_fim' => $times->get(2) ? Carbon::parse($times->get(2))->format('H:i') : '',
-            'saida' => $times->get(3) ? Carbon::parse($times->get(3))->format('H:i') : ''
+            'entrada' => $entrada,
+            'almoco_inicio' => $almoco_inicio,
+            'almoco_fim' => $almoco_fim,
+            'saida' => $saida,
         ];
     }
 

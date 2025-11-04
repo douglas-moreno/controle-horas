@@ -31,12 +31,12 @@
                     icon="arrow-down-on-square" 
                     type="submit"
                     :disabled="$importing"
-                    class="bg-blue-500 text-white rounded px-4 py-2" 
+                    class="bg-blue-500 text-white rounded hover:transition-all hover:duration-300 hover:scale-110" 
                 />
             </form>
         </div>
         <div>
-            <x-ui-button icon="plus" href="{{ route('employees.create') }}">Adicionar Funcionário</x-ui-button>
+            <x-ui-button class="transition-all hover:duration-300 hover:scale-110" icon="plus" href="{{ route('employees.create') }}">Adicionar Funcionário</x-ui-button>
         </div>
     </div>
 
@@ -73,9 +73,9 @@
                             @endif
                         </td>
                         <td class="flex justify-center gap-2 p-2">
-                            <x-ui-button sm fuchsia wire:click="horasExtras({{ $employee }})"><x-ui-icon name="clock" class="w-4 h-4" />Horas</x-ui-button>
-                            <x-ui-button sm href="{{ route('employees.edit', $employee) }}"><x-ui-icon name="pencil" class="w-4 h-4" />Editar</x-ui-button>
-                            <x-ui-button sm red wire:click="destroy({{ $employee }})" wire:confirm="Confirma excluir registro?"><x-ui-icon name="trash" class="w-4 h-4" />Excluir</x-ui-button>
+                            <x-ui-button class="hover:transition-all hover:duration-300 hover:scale-110" sm fuchsia wire:click="horasExtras({{ $employee }})"><x-ui-icon name="clock" class="w-4 h-4" />Horas</x-ui-button>
+                            <x-ui-button class="hover:transition-all hover:duration-300 hover:scale-110" sm href="{{ route('employees.edit', $employee) }}"><x-ui-icon name="pencil" class="w-4 h-4" />Editar</x-ui-button>
+                            <x-ui-button class="hover:transition-all hover:duration-300 hover:scale-110" sm red wire:click="destroy({{ $employee }})" wire:confirm="Confirma excluir registro?"><x-ui-icon name="trash" class="w-4 h-4" />Excluir</x-ui-button>
                         </td>
                     </tr>
                 @endforeach

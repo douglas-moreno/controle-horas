@@ -11,7 +11,7 @@
         <x-ui-input label="Função" type="text" wire:model="position" placeholder="Função do Funcionário" />
     </div>
     <div class="mt-6 flex justify-between">
-        <x-ui-button wire:click="createEmployee">Salvar Funcionário</x-ui-button>
-        <x-ui-button warning href="{{ route('employees.index') }}">Cancelar</x-ui-button>
+        <x-ui-button class="hover:transition-all hover:duration-300 hover:scale-110" wire:click="createEmployee">Salvar Funcionário</x-ui-button>
+        <x-ui-button class="hover:transition-all hover:duration-300 hover:scale-110" warning href="{{ route('employees.index') }}">Cancelar</x-ui-button>
     </div>
 </div>

@@ -37,6 +37,8 @@ Route::middleware(['auth'])->group(function () {
     Route::get('employees/create', \App\Livewire\EmployeeCreate::class)->name('employees.create');
     Route::get('employees/{employee}/edit', \App\Livewire\EmployeeEdit::class)->name('employees.edit');
     Route::get('employees/{employee}/horas-extras', \App\Livewire\EmployeeHorasExtras::class)->name('employees.horas-extras');
+    // Route::get('employees/{employee}/points-edit', \App\Livewire\EmployeePointsEdit::class)->name('points-edit');
+    Route::get('employees/{employee}/points-edit/{date}', \App\Livewire\EmployeeHorasExtras::class)->name('points-edit');
 });
 
 require __DIR__.'/auth.php';
