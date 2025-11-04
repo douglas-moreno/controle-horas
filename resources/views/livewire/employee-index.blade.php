@@ -13,8 +13,17 @@
                         accept=".txt"
                         {{ $importing ? 'disabled' : '' }}
                     >
+                    <div wire:loading wire:target="file">
+                        <span class="text-blue-500 text-sm block mt-1">Carregando arquivo...</span>
+                    </div>
                     @error('file') 
-                        <span class="text-red-500 text-sm block mt-1">{{ $message }}</span> 
+                        <span class="text-red-500 text-sm block mt-1">
+                            @if(str_contains($message, 'failed to upload'))
+                                Arquivo muito grande. Tamanho máximo: 10MB
+                            @else
+                                {{ $message }}
+                            @endif
+                        </span>
                     @enderror
                 </div>
                 <x-ui-button 
