@@ -13,7 +13,7 @@ return new class extends Migration
     {
         Schema::create('points', function (Blueprint $table) {
             $table->id();
-            $table->integer('pis')->nullable();
+            $table->bigInteger('pis')->nullable();
             $table->date('date')->nullable();
             $table->time('time')->nullable();
             $table->string('type')->nullable();
