@@ -17,6 +17,11 @@
             display-format="DD/MM/YYYY"
             timezone="America/Sao_Paulo"
         />
+
+        <x-ui-button wire:click="periodoAnterior" icon="arrow-long-left" secondary class="mt-6 hover:transition-all hover:duration-300 hover:scale-110" />
+        
+        <x-ui-button wire:click="periodoProximo" icon="arrow-long-right" secondary class="mt-6 hover:transition-all hover:duration-300 hover:scale-110" />
+
         <x-ui-datetime-picker
             label="Data Final"
             wire:model.live="endDate"

@@ -6,14 +6,45 @@ use App\Models\Employee;
 use Livewire\Component;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Livewire\Attributes\Url;
 
 class EmployeeHorasExtras extends Component
 {
 
     public $employee;
     public $groups;
+    public $mes;
+    public $ano;
+
+    #[Url()]
     public $startDate;
+
+    #[Url()]
     public $endDate;
+
+    public function periodoAnterior()
+    {
+        $this->mes--;
+        if ($this->mes < 1) {
+            $this->mes = 12;
+            $this->ano--;
+        }
+        $this->startDate = Carbon::create($this->ano, $this->mes-1, 26)->format('Y-m-d');
+        $this->endDate = Carbon::create($this->ano, $this->mes, 25)->format('Y-m-d');
+        $this->updatePoints();
+    }
+
+    public function periodoProximo()
+    {
+        $this->mes++;
+        if ($this->mes > 12) {
+            $this->mes = 1;
+            $this->ano++;
+        }
+        $this->startDate = Carbon::create($this->ano, $this->mes-1, 26)->format('Y-m-d');
+        $this->endDate = Carbon::create($this->ano, $this->mes, 25)->format('Y-m-d');
+        $this->updatePoints();
+    }
 
     public function mount($employee)
     {
@@ -21,9 +52,17 @@ class EmployeeHorasExtras extends Component
             ->with('points')
             ->firstOrFail();
 
-        // Inicializa com primeiro e último dia do mês atual
-        $this->startDate = now()->startOfMonth()->format('Y-m-d');
-        $this->endDate = now()->endOfMonth()->format('Y-m-d');
+        // Pegar o mês e ano atuais
+        $this->mes = now()->month;
+        $this->ano = now()->year;
+        
+        //Monta as datas de início e fim do mês atual
+        if (!$this->startDate) {
+            $this->startDate = Carbon::create($this->ano, $this->mes-1, 26)->format('Y-m-d');
+        }
+        if (! $this->endDate) {
+            $this->endDate = Carbon::create($this->ano, $this->mes, 25)->format('Y-m-d');
+        }
 
         $this->groups = $this->getGroupedPoints();
     }
