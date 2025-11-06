@@ -46,6 +46,22 @@ class EmployeePointsEdit extends Component
         );
     }
 
+    public function removePoint($pointId)
+    {
+        $point = Point::find($pointId);
+        if ($point) {
+            $point->delete();
+            $this->points = $this->points->filter(function ($p) use ($pointId) {
+                return $p->id !== $pointId;
+            });
+
+            $this->notification()->success(
+                $title = 'Ponto Removido',
+                $description = 'O ponto foi removido com sucesso.'
+            );
+        }
+    }
+
     public function mount($employee, $date)
     {
         $this->employee = Employee::find($employee);
