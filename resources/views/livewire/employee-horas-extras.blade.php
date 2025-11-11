@@ -31,6 +31,25 @@
         />
     </div>
 
+    <div class="mb-4 grid grid-cols-4 gap-4">
+        <div class="bg-blue-50 p-4 rounded-lg border border-blue-200">
+            <div class="text-sm text-gray-600 mb-1">Seg - Sex</div>
+            <div class="text-2xl font-bold text-blue-700">{{ $totalWeekdayHours ?? '00:00' }}</div>
+        </div>
+        <div class="bg-orange-50 p-4 rounded-lg border border-orange-200">
+            <div class="text-sm text-gray-600 mb-1">Sábado</div>
+            <div class="text-2xl font-bold text-orange-700">{{ $totalSaturdayHours ?? '00:00' }}</div>
+        </div>
+        <div class="bg-red-50 p-4 rounded-lg border border-red-200">
+            <div class="text-sm text-gray-600 mb-1">Domingo</div>
+            <div class="text-2xl font-bold text-red-700">{{ $totalSundayHours ?? '00:00' }}</div>
+        </div>
+        <div class="bg-green-50 p-4 rounded-lg border border-green-200">
+            <div class="text-sm text-gray-600 mb-1">Total</div>
+            <div class="text-2xl font-bold text-green-700">{{ $totalExtraHours ?? '00:00' }}</div>
+        </div>
+    </div>
+
     <div class="bg-white shadow rounded-lg p-6">
         <table class="table-auto w-full border-collapse border border-gray-200">
             <thead>
@@ -41,12 +60,13 @@
                     <th class="uppercase">Almoço Início</th>
                     <th class="uppercase">Almoço Fim</th>
                     <th class="uppercase">Saída</th>
+                    <th class="uppercase">Hora Extra</th>
                 </tr>
             </thead>
             <tbody>
                 @if($groups->isEmpty())
                     <tr>
-                        <td colspan="6" class="text-center p-4 text-gray-500">Nenhum ponto registrado.</td>
+                        <td colspan="7" class="text-center p-4 text-gray-500">Nenhum ponto registrado.</td>
                     </tr>
                 @else
                     @foreach($groups as $date => $points)
@@ -73,6 +93,7 @@
                             <td class="text-lg text-center p-2">{{ $times['almoco_inicio'] }}</td>
                             <td class="text-lg text-center p-2">{{ $times['almoco_fim'] }}</td>
                             <td class="text-lg text-center p-2">{{ $times['saida'] }}</td>
+                            <td class="text-lg text-center p-2 font-bold text-green-600">{{ $times['hora_extra'] }}</td>
                         </tr>
                     @endforeach
                 @endif

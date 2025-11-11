@@ -52,7 +52,7 @@
     >
         <div class="space-y-4">
             <x-ui-input wire:model="date" disabled label="Data" />
-            <x-ui-input wire:model="newPointTime" label="Hora" mask="99:99" />
+            <x-ui-maskable emit-formatted wire:model="newPointTime" label="Hora" mask="H:m" />
         </div>
         <x-slot name="footer">
             <div class="flex justify-end space-x-2">

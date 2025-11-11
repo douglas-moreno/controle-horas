@@ -10,11 +10,20 @@ use Livewire\Attributes\Url;
 
 class EmployeeHorasExtras extends Component
 {
-
     public $employee;
     public $groups;
     public $mes;
     public $ano;
+
+    public $totalWeekdayMinutes = 0;
+    public $totalSaturdayMinutes = 0;
+    public $totalSundayMinutes = 0;
+    public $totalExtraMinutes = 0;
+
+    public $totalWeekdayHours = '00:00';
+    public $totalSaturdayHours = '00:00';
+    public $totalSundayHours = '00:00';
+    public $totalExtraHours = '00:00';
 
     #[Url()]
     public $startDate;
@@ -65,11 +74,13 @@ class EmployeeHorasExtras extends Component
         }
 
         $this->groups = $this->getGroupedPoints();
+        $this->computeTotalExtra();
     }
 
     public function updatePoints()
     {
         $this->groups = $this->getGroupedPoints();
+        $this->computeTotalExtra();
     }
 
     // Atualiza automaticamente quando startDate ou endDate mudarem
@@ -162,12 +173,122 @@ class EmployeeHorasExtras extends Component
             $saida = $fmt($times->get(3));
         }
 
-        return [
+        // calcula minutos extras para este dia
+        $extraMinutes = $this->calculateExtraMinutes($entrada, $almoco_inicio, $almoco_fim, $saida, $points);
+
+        $result = [
             'entrada' => $entrada,
             'almoco_inicio' => $almoco_inicio,
             'almoco_fim' => $almoco_fim,
             'saida' => $saida,
+            'hora_extra_minutes' => $extraMinutes,
+            'hora_extra' => $this->minutesToTime($extraMinutes)
         ];
+
+        return $result;
+    }
+
+    // Novo: retorna minutos extras (inteiro) para um dia
+    private function calculateExtraMinutes($entrada, $almocoInicio, $almocoFim, $saida, $points): int
+    {
+        if (empty($entrada) || empty($saida)) {
+            return 0;
+        }
+
+        try {
+            $date = Carbon::parse($points->first()->date);
+            $isWeekend = $date->isWeekend();
+
+            // Constrói Carbon com data para evitar problemas de comparação
+            $start = Carbon::parse($date->format('Y-m-d') . ' ' . $entrada);
+            $end = Carbon::parse($date->format('Y-m-d') . ' ' . $saida);
+            if ($end < $start) {
+                $end->addDay();
+            }
+
+            $total = $start->diffInMinutes($end);
+
+            // Final de semana: soma tudo e subtrai 1h se passou de 6h (regra do usuário)
+            if ($isWeekend) {
+                if ($total > 360) {
+                    $total -= 60;
+                }
+                return max(0, $total);
+            }
+
+            // Dias úteis: desconta almoço se marcado
+            if (!empty($almocoInicio) && !empty($almocoFim)) {
+                $almocoStart = Carbon::parse($date->format('Y-m-d') . ' ' . $almocoInicio);
+                $almocoEnd = Carbon::parse($date->format('Y-m-d') . ' ' . $almocoFim);
+                if ($almocoEnd < $almocoStart) {
+                    $almocoEnd->addDay();
+                }
+                $almocoTime = $almocoStart->diffInMinutes($almocoEnd);
+                $total -= $almocoTime;
+            } elseif ($total > 360) {
+                // sem marcação de almoço mas passou de 6h -> subtrai 1h padrão
+                $total -= 60;
+            }
+
+            // Regras por dia da semana para horas extras (minutos)
+            if ($date->isFriday()) {
+                // sexta: padrão 9h = 540 minutos
+                $extraMinutes = max(0, $total - 480);
+            } else {
+                // seg-qui: padrão 10h = 600 minutos
+                $extraMinutes = max(0, $total - 540);
+            }
+
+            return max(0, (int) $extraMinutes);
+        } catch (\Exception $e) {
+            \Log::error("Error calculating extra minutes: " . $e->getMessage());
+            return 0;
+        }
+    }
+
+    private function computeTotalExtra(): void
+    {
+        $weekdayMinutes = 0;
+        $saturdayMinutes = 0;
+        $sundayMinutes = 0;
+
+        if (is_iterable($this->groups)) {
+            foreach ($this->groups as $date => $points) {
+                $times = $this->formatTimeValues($points);
+                $extraMinutes = (int) ($times['hora_extra_minutes'] ?? 0);
+
+                $dt = Carbon::parse($date);
+                if ($dt->isSaturday()) {
+                    $saturdayMinutes += $extraMinutes;
+                } elseif ($dt->isSunday()) {
+                    $sundayMinutes += $extraMinutes;
+                } else {
+                    $weekdayMinutes += $extraMinutes;
+                }
+            }
+        }
+
+        $this->totalWeekdayMinutes = $weekdayMinutes;
+        $this->totalSaturdayMinutes = $saturdayMinutes;
+        $this->totalSundayMinutes = $sundayMinutes;
+        $this->totalExtraMinutes = $weekdayMinutes + $saturdayMinutes + $sundayMinutes;
+
+        $this->totalWeekdayHours = $this->minutesToTime($weekdayMinutes);
+        $this->totalSaturdayHours = $this->minutesToTime($saturdayMinutes);
+        $this->totalSundayHours = $this->minutesToTime($sundayMinutes);
+        $this->totalExtraHours = $this->minutesToTime($this->totalExtraMinutes);
+    }
+
+    private function minutesToTime(int $minutes): string
+    {
+        if ($minutes <= 0) {
+            return '00:00';
+        }
+
+        $hours = floor($minutes / 60);
+        $mins = $minutes % 60;
+
+        return sprintf('%02d:%02d', $hours, $mins);
     }
 
     public function render()
