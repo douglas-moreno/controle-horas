@@ -210,9 +210,20 @@ class EmployeeHorasExtras extends Component
 
             // Final de semana: soma tudo e subtrai 1h se passou de 6h (regra do usuário)
             if ($isWeekend) {
-                if ($total > 360) {
+                // Se houver marcação de almoço, desconta o intervalo informado
+                if (!empty($almocoInicio) && !empty($almocoFim)) {
+                    $almocoStart = Carbon::parse($date->format('Y-m-d') . ' ' . $almocoInicio);
+                    $almocoEnd = Carbon::parse($date->format('Y-m-d') . ' ' . $almocoFim);
+                    if ($almocoEnd < $almocoStart) {
+                        $almocoEnd->addDay();
+                    }
+                    $lunchMinutes = $almocoStart->diffInMinutes($almocoEnd);
+                    $total -= $lunchMinutes;
+                } elseif ($total > 360) {
+                    // sem marcação de almoço mas passou de 6h -> subtrai 1h padrão
                     $total -= 60;
                 }
+
                 return max(0, $total);
             }
 
