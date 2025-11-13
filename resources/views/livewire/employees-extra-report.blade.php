@@ -24,12 +24,6 @@
             label="Filtrar por Total de Hora Extra" 
             clearable=false
         />
-        <x-ui-input 
-            type="number" 
-            wire:model.live="minutesFilter" 
-            label="Minutos Mínimos de Hora Extra" 
-            disabled
-         />
     </div>
 
     <div class="bg-white shadow rounded-lg p-4">
