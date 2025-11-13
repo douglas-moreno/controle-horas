@@ -77,16 +77,30 @@
                             $dayAbbrev = $dt->locale('pt_BR')->translatedFormat('D'); // ex: "sab"
                             $dayAbbrev = mb_strlen($dayAbbrev) ? mb_strtoupper(mb_substr($dayAbbrev, 0, 1)) . mb_substr($dayAbbrev, 1) : $dayAbbrev; // "Sab"
                             $displayDate = $datePart . ' ' . $dayAbbrev;
+
+                            // detecta se há algum ponto marcado manualmente (campo type === 'manual')
+                            $isManual = collect($points)->contains(function($p) {
+                                return isset($p->type) && $p->type === 'manual';
+                            });
+
+                            // Apenas destaque de fim de semana; manual NÃO altera o background (apenas mostra badge)
                             $rowClass = $dt->isWeekend() ? 'bg-yellow-50' : '';
                         @endphp
                         <tr class="border-t border-gray-200 {{ $rowClass }}">
                             <td class="text-lg p-2">
-                                <x-ui-button 
-                                    href="{{ route('points-edit', ['employee' => $employee->id, 'date' => $date]) }}" 
-                                    icon="pencil" 
-                                    small
-                                    class="hover:transition-all hover:duration-300 hover:scale-110"
-                                />
+                                <div class="flex items-center space-x-2">
+                                    <x-ui-button 
+                                        href="{{ route('points-edit', ['employee' => $employee->id, 'date' => $date]) }}" 
+                                        icon="pencil" 
+                                        small
+                                        class="hover:transition-all hover:duration-300 hover:scale-110"
+                                    />
+                                    @if($isManual)
+                                        <div class="mt-1">
+                                            <x-ui-badge label="Manual" color="orange" />
+                                        </div>
+                                    @endif
+                                </div>
                             </td>
                             <td class="text-lg text-center p-2">{{ $displayDate }}</td>
                             <td class="text-lg text-center p-2">{{ $times['entrada'] }}</td>
