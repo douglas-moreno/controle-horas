@@ -7,9 +7,12 @@ use Livewire\Component;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Livewire\Attributes\Url;
+use WireUi\Traits\WireUiActions;
 
 class EmployeeHorasExtras extends Component
 {
+    use WireUiActions;
+
     public $employee;
     public $groups;
     public $mes;
@@ -252,7 +255,11 @@ class EmployeeHorasExtras extends Component
 
             return max(0, (int) $extraMinutes);
         } catch (\Exception $e) {
-            \Log::error("Error calculating extra minutes: " . $e->getMessage());
+            $this->notification()->error(
+                $title = 'Erro ao calcular minutos extras',
+                $description = 'Ocorreu um erro ao calcular os minutos extras. ' . $e->getMessage()
+            );
+            // \Log::error("Error calculating extra minutes: " . $e->getMessage());
             return 0;
         }
     }
