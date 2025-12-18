@@ -1,5 +1,6 @@
 <?php
 
+use App\Livewire\EmployeeResumeReport;
 use App\Livewire\EmployeesExtraReport;
 use App\Livewire\Settings\Appearance;
 use App\Livewire\Settings\Password;
@@ -42,6 +43,7 @@ Route::middleware(['auth'])->group(function () {
     Route::get('employees/{employee}/horas-extras', \App\Livewire\EmployeeHorasExtras::class)->name('employees.horas-extras');
     Route::get('employees/{employee}/points-edit/{date}', \App\Livewire\EmployeePointsEdit::class)->name('points-edit');
     Route::get('/reports/extra-hours', EmployeesExtraReport::class)->name('reports.extra-hours');
+    Route::get('/reports/resume', EmployeeResumeReport::class)->name('reports.resume');
 });
 
 require __DIR__.'/auth.php';
