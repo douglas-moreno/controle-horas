@@ -2,15 +2,20 @@
 
 namespace App\Livewire;
 
+use App\Exports\EmployeeResumeReportExport;
 use App\Models\Employee;
 use Carbon\Carbon;
 use Livewire\Component;
+use Maatwebsite\Excel\Facades\Excel;
 
 class EmployeeResumeReport extends Component
 {
     public $mes;
+
     public $ano;
+
     public $startDate;
+
     public $endDate;
 
     public $results = [];
@@ -44,7 +49,7 @@ class EmployeeResumeReport extends Component
         $this->setPeriodFromMonth($this->ano, $this->mes);
         $this->loadResults();
     }
-    
+
     private function setPeriodFromMonth(int $ano, int $mes): void
     {
         // período: 26 do mês anterior até 25 do mês informado
@@ -66,17 +71,17 @@ class EmployeeResumeReport extends Component
 
         // Carrega apenas funcionários ativos (sem data de rescisão) e com pontos no período
         $employees = Employee::where(function ($q) {
-                $q->whereNull('recision_date')->orWhere('recision_date', '');
-            })->with(['points' => function ($q) use ($start, $end) {
-                $q->whereBetween('date', [$start->format('Y-m-d'), $end->format('Y-m-d')])
-                  ->orderBy('date')->orderBy('time');
-            }])->get();
+            $q->whereNull('recision_date')->orWhere('recision_date', '');
+        })->with(['points' => function ($q) use ($start, $end) {
+            $q->whereBetween('date', [$start->format('Y-m-d'), $end->format('Y-m-d')])
+                ->orderBy('date')->orderBy('time');
+        }])->get();
 
         $results = [];
 
         foreach ($employees as $employee) {
             // agrupa por dia
-            $groups = collect($employee->points)->groupBy(fn($p) => Carbon::parse($p->date)->format('Y-m-d'));
+            $groups = collect($employee->points)->groupBy(fn ($p) => Carbon::parse($p->date)->format('Y-m-d'));
 
             $weekdayMinutes = 0;
             $saturdayMinutes = 0;
@@ -86,7 +91,7 @@ class EmployeeResumeReport extends Component
                 $times = collect($points)->sortBy('time')->pluck('time')->values();
                 $count = $times->count();
 
-                $fmt = fn($v) => empty($v) ? '' : Carbon::parse($v)->format('H:i');
+                $fmt = fn ($v) => empty($v) ? '' : Carbon::parse($v)->format('H:i');
 
                 $entrada = '';
                 $almoco_inicio = '';
@@ -136,7 +141,7 @@ class EmployeeResumeReport extends Component
             ];
         }
 
-        usort($results, fn($a, $b) => $b['total_minutes'] <=> $a['total_minutes']);
+        usort($results, fn ($a, $b) => $b['total_minutes'] <=> $a['total_minutes']);
 
         $this->results = $results;
     }
@@ -152,28 +157,35 @@ class EmployeeResumeReport extends Component
             $date = Carbon::parse($points->first()->date);
             $isWeekend = $date->isWeekend();
 
-            $start = Carbon::parse($date->format('Y-m-d') . ' ' . $entrada);
-            $end = Carbon::parse($date->format('Y-m-d') . ' ' . $saida);
-            if ($end < $start) $end->addDay();
+            $start = Carbon::parse($date->format('Y-m-d').' '.$entrada);
+            $end = Carbon::parse($date->format('Y-m-d').' '.$saida);
+            if ($end < $start) {
+                $end->addDay();
+            }
 
             $total = $start->diffInMinutes($end);
 
             if ($isWeekend) {
-                if (!empty($almocoInicio) && !empty($almocoFim)) {
-                    $almocoStart = Carbon::parse($date->format('Y-m-d') . ' ' . $almocoInicio);
-                    $almocoEnd = Carbon::parse($date->format('Y-m-d') . ' ' . $almocoFim);
-                    if ($almocoEnd < $almocoStart) $almocoEnd->addDay();
+                if (! empty($almocoInicio) && ! empty($almocoFim)) {
+                    $almocoStart = Carbon::parse($date->format('Y-m-d').' '.$almocoInicio);
+                    $almocoEnd = Carbon::parse($date->format('Y-m-d').' '.$almocoFim);
+                    if ($almocoEnd < $almocoStart) {
+                        $almocoEnd->addDay();
+                    }
                     $total -= $almocoStart->diffInMinutes($almocoEnd);
                 } elseif ($total > 360) {
                     $total -= 60;
                 }
-                return max(0, (int)$total);
+
+                return max(0, (int) $total);
             }
 
-            if (!empty($almocoInicio) && !empty($almocoFim)) {
-                $almocoStart = Carbon::parse($date->format('Y-m-d') . ' ' . $almocoInicio);
-                $almocoEnd = Carbon::parse($date->format('Y-m-d') . ' ' . $almocoFim);
-                if ($almocoEnd < $almocoStart) $almocoEnd->addDay();
+            if (! empty($almocoInicio) && ! empty($almocoFim)) {
+                $almocoStart = Carbon::parse($date->format('Y-m-d').' '.$almocoInicio);
+                $almocoEnd = Carbon::parse($date->format('Y-m-d').' '.$almocoFim);
+                if ($almocoEnd < $almocoStart) {
+                    $almocoEnd->addDay();
+                }
                 $total -= $almocoStart->diffInMinutes($almocoEnd);
             } elseif ($total > 360) {
                 $total -= 60;
@@ -185,7 +197,7 @@ class EmployeeResumeReport extends Component
                 $extraMinutes = max(0, $total - 540); // 9h
             }
 
-            return max(0, (int)$extraMinutes);
+            return max(0, (int) $extraMinutes);
         } catch (\Exception $e) {
             return 0;
         }
@@ -193,10 +205,25 @@ class EmployeeResumeReport extends Component
 
     private function minutesToTime(int $minutes): string
     {
-        if ($minutes <= 0) return '00:00';
+        if ($minutes <= 0) {
+            return '00:00';
+        }
         $hours = floor($minutes / 60);
         $mins = $minutes % 60;
+
         return sprintf('%02d:%02d', $hours, $mins);
+    }
+
+    public function exportToExcel(): \Symfony\Component\HttpFoundation\BinaryFileResponse
+    {
+        $startFormatted = Carbon::createFromFormat('Y-m-d', $this->startDate)->format('d-m-Y');
+        $endFormatted = Carbon::createFromFormat('Y-m-d', $this->endDate)->format('d-m-Y');
+        $filename = "resumo_horas_extras_{$startFormatted}_{$endFormatted}.xlsx";
+
+        return Excel::download(
+            new EmployeeResumeReportExport($this->results, $this->startDate, $this->endDate),
+            $filename
+        );
     }
 
     public function render()

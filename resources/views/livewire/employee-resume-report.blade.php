@@ -20,7 +20,10 @@
                     <th class="p-2 text-center">Seg-Sex</th>
                     <th class="p-2 text-center">Sábado</th>
                     <th class="p-2 text-center">Domingo</th>
-                    <th class="p-2 text-center">Total</th>
+                    <th class="p-2 text-end gap-2">
+                        <span>Total</span>
+                        <x-ui-button flat positive icon="document-arrow-down" wire:click="exportToExcel" />
+                    </th>
                 </tr>
             </thead>
             <tbody>
