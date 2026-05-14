@@ -28,7 +28,7 @@ class EmployeeEdit extends Component
         $this->employee->update([
             'name' => $this->name,
             'pis' => $this->pis,
-            'recision_date' => $this->recision_date ?? "",
+            'recision_date' => $this->recision_date ?? null,
             'position' => $this->position,
         ]);
 
