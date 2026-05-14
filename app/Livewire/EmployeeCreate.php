@@ -23,9 +23,9 @@ class EmployeeCreate extends Component
         ]);
 
         Employee::create([
-            'name' => $this->name,
-            'pis' => $this->pis,
-            'position' => $this->position,
+            'name' => trim($this->name),
+            'pis' => trim($this->pis),
+            'position' => trim($this->position),
         ]);
 
         $this->reset(['name', 'pis', 'position']);

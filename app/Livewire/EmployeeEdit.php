@@ -26,10 +26,10 @@ class EmployeeEdit extends Component
         ]);
 
         $this->employee->update([
-            'name' => $this->name,
-            'pis' => $this->pis,
+            'name' => trim($this->name),
+            'pis' => trim($this->pis),
             'recision_date' => $this->recision_date ?? null,
-            'position' => $this->position,
+            'position' => trim($this->position),
         ]);
 
         $this->notification()->success(
