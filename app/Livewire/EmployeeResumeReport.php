@@ -4,9 +4,11 @@ namespace App\Livewire;
 
 use App\Exports\EmployeeResumeReportExport;
 use App\Models\Employee;
+use App\Models\Holiday;
 use Carbon\Carbon;
 use Livewire\Component;
 use Maatwebsite\Excel\Facades\Excel;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class EmployeeResumeReport extends Component
 {
@@ -86,6 +88,7 @@ class EmployeeResumeReport extends Component
             $weekdayMinutes = 0;
             $saturdayMinutes = 0;
             $sundayMinutes = 0;
+            $holidayMinutes = 0;
 
             foreach ($groups as $date => $points) {
                 $times = collect($points)->sortBy('time')->pluck('time')->values();
@@ -117,7 +120,11 @@ class EmployeeResumeReport extends Component
                 $minutes = $this->calculateExtraMinutes($entrada, $almoco_inicio, $almoco_fim, $saida, $points);
 
                 $dt = Carbon::parse($date);
-                if ($dt->isSaturday()) {
+
+                // Feriado tem precedência sobre o dia da semana
+                if (Holiday::isHoliday($dt)) {
+                    $holidayMinutes += $minutes;
+                } elseif ($dt->isSaturday()) {
                     $saturdayMinutes += $minutes;
                 } elseif ($dt->isSunday()) {
                     $sundayMinutes += $minutes;
@@ -126,17 +133,19 @@ class EmployeeResumeReport extends Component
                 }
             }
 
-            $total = $weekdayMinutes + $saturdayMinutes + $sundayMinutes;
+            $total = $weekdayMinutes + $saturdayMinutes + $sundayMinutes + $holidayMinutes;
 
             $results[] = [
                 'employee' => $employee,
                 'weekday_minutes' => $weekdayMinutes,
                 'saturday_minutes' => $saturdayMinutes,
                 'sunday_minutes' => $sundayMinutes,
+                'holiday_minutes' => $holidayMinutes,
                 'total_minutes' => $total,
                 'weekday_hours' => $this->minutesToTime($weekdayMinutes),
                 'saturday_hours' => $this->minutesToTime($saturdayMinutes),
                 'sunday_hours' => $this->minutesToTime($sundayMinutes),
+                'holiday_hours' => $this->minutesToTime($holidayMinutes),
                 'total_hours' => $this->minutesToTime($total),
             ];
         }
@@ -155,7 +164,9 @@ class EmployeeResumeReport extends Component
 
         try {
             $date = Carbon::parse($points->first()->date);
-            $isWeekend = $date->isWeekend();
+
+            // Feriado segue a mesma regra do fim de semana: toda hora trabalhada é extra
+            $isFullOvertimeDay = $date->isWeekend() || Holiday::isHoliday($date);
 
             $start = Carbon::parse($date->format('Y-m-d').' '.$entrada);
             $end = Carbon::parse($date->format('Y-m-d').' '.$saida);
@@ -165,7 +176,7 @@ class EmployeeResumeReport extends Component
 
             $total = $start->diffInMinutes($end);
 
-            if ($isWeekend) {
+            if ($isFullOvertimeDay) {
                 if (! empty($almocoInicio) && ! empty($almocoFim)) {
                     $almocoStart = Carbon::parse($date->format('Y-m-d').' '.$almocoInicio);
                     $almocoEnd = Carbon::parse($date->format('Y-m-d').' '.$almocoFim);
@@ -214,7 +225,7 @@ class EmployeeResumeReport extends Component
         return sprintf('%02d:%02d', $hours, $mins);
     }
 
-    public function exportToExcel(): \Symfony\Component\HttpFoundation\BinaryFileResponse
+    public function exportToExcel(): BinaryFileResponse
     {
         $startFormatted = Carbon::createFromFormat('Y-m-d', $this->startDate)->format('d-m-Y');
         $endFormatted = Carbon::createFromFormat('Y-m-d', $this->endDate)->format('d-m-Y');

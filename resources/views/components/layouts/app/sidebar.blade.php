@@ -17,6 +17,7 @@
                     <flux:navlist.item icon="home" :href="route('dashboard')" :current="request()->routeIs('dashboard')" wire:navigate>{{ __('Dashboard') }}</flux:navlist.item>
                     <flux:navlist.item icon="document-currency-dollar" :href="route('reports.extra-hours')" :current="request()->routeIs('reports.extra-hours')" wire:navigate>{{ __('Relatório') }}</flux:navlist.item>
                     <flux:navlist.item icon="document-currency-dollar" :href="route('reports.resume')" :current="request()->routeIs('reports.resume')" wire:navigate>{{ __('Resumo') }}</flux:navlist.item>
+                    <flux:navlist.item icon="calendar-days" :href="route('holidays.index')" :current="request()->routeIs('holidays.*')" wire:navigate>{{ __('Feriados') }}</flux:navlist.item>
                 </flux:navlist.group>
             </flux:navlist>
 

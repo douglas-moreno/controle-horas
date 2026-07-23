@@ -31,7 +31,7 @@
         />
     </div>
 
-    <div class="mb-4 grid grid-cols-4 gap-4">
+    <div class="mb-4 grid grid-cols-5 gap-4">
         <div class="bg-blue-50 p-4 rounded-lg border border-blue-200">
             <div class="text-sm text-gray-600 mb-1">Seg - Sex</div>
             <div class="text-2xl font-bold text-blue-700">{{ $totalWeekdayHours ?? '00:00' }}</div>
@@ -43,6 +43,10 @@
         <div class="bg-red-50 p-4 rounded-lg border border-red-200">
             <div class="text-sm text-gray-600 mb-1">Domingo</div>
             <div class="text-2xl font-bold text-red-700">{{ $totalSundayHours ?? '00:00' }}</div>
+        </div>
+        <div class="bg-purple-50 p-4 rounded-lg border border-purple-200">
+            <div class="text-sm text-gray-600 mb-1">Feriado</div>
+            <div class="text-2xl font-bold text-purple-700">{{ $totalHolidayHours ?? '00:00' }}</div>
         </div>
         <div class="bg-green-50 p-4 rounded-lg border border-green-200">
             <div class="text-sm text-gray-600 mb-1">Total</div>
@@ -83,8 +87,11 @@
                                 return isset($p->type) && $p->type === 'manual';
                             });
 
-                            // Apenas destaque de fim de semana; manual NÃO altera o background (apenas mostra badge)
-                            $rowClass = $dt->isWeekend() ? 'bg-yellow-50' : '';
+                            // feriado cadastrado para o dia (todas as horas viram extras)
+                            $holidayDescription = \App\Models\Holiday::descriptionFor($date);
+
+                            // Apenas destaque de fim de semana/feriado; manual NÃO altera o background (apenas mostra badge)
+                            $rowClass = ($dt->isWeekend() || $holidayDescription) ? 'bg-yellow-50' : '';
                         @endphp
                         <tr class="border-t border-gray-200 {{ $rowClass }}">
                             <td class="text-lg p-2">
@@ -98,6 +105,11 @@
                                     @if($isManual)
                                         <div class="mt-1">
                                             <x-ui-badge label="Manual" color="orange" />
+                                        </div>
+                                    @endif
+                                    @if($holidayDescription)
+                                        <div class="mt-1">
+                                            <x-ui-badge :label="$holidayDescription" color="purple" />
                                         </div>
                                     @endif
                                 </div>

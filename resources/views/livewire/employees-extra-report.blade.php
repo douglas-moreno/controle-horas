@@ -33,6 +33,7 @@
                     <th class="p-2 text-left">Funcionário</th>
                     <th class="p-2 text-left">PIS</th>
                     <th class="p-2 text-left">Função</th>
+                    <th class="p-2 text-center">Feriado</th>
                     <th class="p-2 text-center">Total (HH:MM)</th>
                     <th class="p-2 text-center">Minutos</th>
                     <th class="p-2 text-center">Ação</th>
@@ -44,6 +45,7 @@
                         <td class="p-2">{{ $row['employee']->name }}</td>
                         <td class="p-2">{{ $row['employee']->pis }}</td>
                         <td class="p-2">{{ $row['employee']->position }}</td>
+                        <td class="p-2 text-center">{{ $row['holiday_hours'] }}</td>
                         <td class="p-2 text-center font-semibold text-green-700">{{ $row['hours'] }}</td>
                         <td class="p-2 text-center">{{ $row['minutes'] }}</td>
                         <td class="p-2 text-center">
@@ -52,7 +54,7 @@
                     </tr>
                 @empty
                     <tr>
-                        <td colspan="6" class="p-4 text-center text-gray-500">Nenhum funcionário com mais de {{ $minutesFilter }} minutos de hora extra no período.</td>
+                        <td colspan="7" class="p-4 text-center text-gray-500">Nenhum funcionário com mais de {{ $minutesFilter }} minutos de hora extra no período.</td>
                     </tr>
                 @endforelse
             </tbody>

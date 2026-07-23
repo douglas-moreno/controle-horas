@@ -20,6 +20,7 @@
                     <th class="p-2 text-center">Seg-Sex</th>
                     <th class="p-2 text-center">Sábado</th>
                     <th class="p-2 text-center">Domingo</th>
+                    <th class="p-2 text-center">Feriado</th>
                     <th class="p-2 text-end gap-2">
                         <span>Total</span>
                         <x-ui-button flat positive icon="document-arrow-down" wire:click="exportToExcel" />
@@ -33,11 +34,12 @@
                         <td class="p-2 text-center">{{ $row['weekday_hours'] }}</td>
                         <td class="p-2 text-center">{{ $row['saturday_hours'] }}</td>
                         <td class="p-2 text-center">{{ $row['sunday_hours'] }}</td>
+                        <td class="p-2 text-center">{{ $row['holiday_hours'] }}</td>
                         <td class="p-2 text-center"><strong>{{ $row['total_hours'] }}</strong></td>
                     </tr>
                 @empty
                     <tr>
-                        <td class="border px-2 py-4 text-center" colspan="5">Nenhum funcionário encontrado neste período.</td>
+                        <td class="border px-2 py-4 text-center" colspan="6">Nenhum funcionário encontrado neste período.</td>
                     </tr>
                 @endforelse
             </tbody>
