@@ -133,19 +133,26 @@ class EmployeeResumeReport extends Component
                 }
             }
 
-            $total = $weekdayMinutes + $saturdayMinutes + $sundayMinutes + $holidayMinutes;
+            // 50% = Seg-Sex + Sábado; 100% = Domingo + Feriado
+            $fiftyMinutes = $weekdayMinutes + $saturdayMinutes;
+            $hundredMinutes = $sundayMinutes + $holidayMinutes;
+            $total = $fiftyMinutes + $hundredMinutes;
 
             $results[] = [
                 'employee' => $employee,
                 'weekday_minutes' => $weekdayMinutes,
                 'saturday_minutes' => $saturdayMinutes,
+                'fifty_minutes' => $fiftyMinutes,
                 'sunday_minutes' => $sundayMinutes,
                 'holiday_minutes' => $holidayMinutes,
+                'hundred_minutes' => $hundredMinutes,
                 'total_minutes' => $total,
                 'weekday_hours' => $this->minutesToTime($weekdayMinutes),
                 'saturday_hours' => $this->minutesToTime($saturdayMinutes),
+                'fifty_hours' => $this->minutesToTime($fiftyMinutes),
                 'sunday_hours' => $this->minutesToTime($sundayMinutes),
                 'holiday_hours' => $this->minutesToTime($holidayMinutes),
+                'hundred_hours' => $this->minutesToTime($hundredMinutes),
                 'total_hours' => $this->minutesToTime($total),
             ];
         }

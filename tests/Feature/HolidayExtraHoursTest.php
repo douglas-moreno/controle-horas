@@ -149,7 +149,35 @@ test('the resume report counts holiday hours as overtime', function () {
 
     expect($component->get('results')[0]['total_hours'])->toBe('09:00')
         ->and($component->get('results')[0]['holiday_hours'])->toBe('09:00')
-        ->and($component->get('results')[0]['weekday_hours'])->toBe('00:00');
+        ->and($component->get('results')[0]['weekday_hours'])->toBe('00:00')
+        ->and($component->get('results')[0]['fifty_hours'])->toBe('00:00')
+        ->and($component->get('results')[0]['hundred_hours'])->toBe('09:00');
+});
+
+test('the resume report groups overtime into 50% and 100% buckets', function () {
+    // Feriado numa quinta (100%)
+    Holiday::create(['date' => HOLIDAY_DATE, 'description' => 'Revolução Constitucionalista']);
+
+    $employee = employeeWithPoints(['07:30', '12:00', '13:00', '17:30'], HOLIDAY_DATE);
+    // Sábado (50%), 09h => 09:00
+    Point::insert(collect(['07:30', '12:00', '13:00', '17:30'])->map(fn (string $time) => [
+        'pis' => $employee->pis,
+        'date' => '2026-07-11',
+        'time' => $time.':00',
+        'type' => 'importado',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ])->all());
+
+    $row = Livewire::test(EmployeeResumeReport::class)
+        ->set('startDate', HOLIDAY_DATE)
+        ->set('endDate', '2026-07-11')
+        ->get('results')[0];
+
+    // 50% = Seg-Sex (0) + Sábado (9h); 100% = Domingo (0) + Feriado (9h)
+    expect($row['fifty_hours'])->toBe('09:00')
+        ->and($row['hundred_hours'])->toBe('09:00')
+        ->and($row['total_hours'])->toBe('18:00');
 });
 
 test('the resume export has a holiday column', function () {
@@ -164,8 +192,8 @@ test('the resume export has a holiday column', function () {
 
     $export = new EmployeeResumeReportExport($results, HOLIDAY_DATE, HOLIDAY_DATE);
 
-    expect($export->headings())->toBe(['Nome', 'Seg-Sex', 'Sábado', 'Domingo', 'Feriado', 'Total'])
-        ->and($export->array()[0])->toBe(['Funcionário Teste', '00:00', '00:00', '00:00', '09:00', '09:00']);
+    expect($export->headings())->toBe(['Nome', 'Seg-Sex', 'Sábado', '50%', 'Domingo', 'Feriado', '100%', 'Total'])
+        ->and($export->array()[0])->toBe(['Funcionário Teste', '00:00', '00:00', '00:00', '00:00', '09:00', '09:00', '09:00']);
 });
 
 test('the resume report keeps zero overtime on a regular workday', function () {

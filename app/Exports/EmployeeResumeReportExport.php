@@ -31,8 +31,10 @@ class EmployeeResumeReportExport implements FromArray, WithHeadings, WithStyles
             $row['employee']->name,
             $row['weekday_hours'],
             $row['saturday_hours'],
+            $row['fifty_hours'],
             $row['sunday_hours'],
             $row['holiday_hours'],
+            $row['hundred_hours'],
             $row['total_hours'],
         ], $this->data);
     }
@@ -43,8 +45,10 @@ class EmployeeResumeReportExport implements FromArray, WithHeadings, WithStyles
             'Nome',
             'Seg-Sex',
             'Sábado',
+            '50%',
             'Domingo',
             'Feriado',
+            '100%',
             'Total',
         ];
     }
@@ -79,6 +83,8 @@ class EmployeeResumeReportExport implements FromArray, WithHeadings, WithStyles
             'D' => ['alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER]],
             'E' => ['alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER]],
             'F' => ['alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER]],
+            'G' => ['alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER]],
+            'H' => ['alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER]],
         ];
     }
 }
