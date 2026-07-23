@@ -1,11 +1,20 @@
 {
     "agents": [
-        "copilot"
+        "claude_code"
     ],
-    "editors": [
-        "vscode"
-    ],
-    "guidelines": [
+    "guidelines": true,
+    "herd_mcp": false,
+    "mcp": true,
+    "packages": [
+        "livewire/volt",
         "laravel/fortify"
+    ],
+    "sail": false,
+    "skills": [
+        "fluxui-development",
+        "volt-development",
+        "pest-testing",
+        "tailwindcss-development",
+        "fortify-development"
     ]
 }
