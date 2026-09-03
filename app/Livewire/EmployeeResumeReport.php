@@ -22,6 +22,10 @@ class EmployeeResumeReport extends Component
 
     public $results = [];
 
+    public string $sortField = 'total_minutes';
+
+    public string $sortDirection = 'desc';
+
     public function mount()
     {
         $this->mes = now()->month;
@@ -157,9 +161,49 @@ class EmployeeResumeReport extends Component
             ];
         }
 
-        usort($results, fn ($a, $b) => $b['total_minutes'] <=> $a['total_minutes']);
+        $this->results = $this->sortResults($results);
+    }
 
-        $this->results = $results;
+    /**
+     * Alterna a ordenação da tabela entre nome e total de horas extras.
+     */
+    public function sortBy(string $field): void
+    {
+        if (! in_array($field, ['name', 'total_minutes'], true)) {
+            return;
+        }
+
+        if ($this->sortField === $field) {
+            $this->sortDirection = $this->sortDirection === 'asc' ? 'desc' : 'asc';
+        } else {
+            $this->sortField = $field;
+            $this->sortDirection = $field === 'name' ? 'asc' : 'desc';
+        }
+
+        $this->loadResults();
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $results
+     * @return array<int, array<string, mixed>>
+     */
+    private function sortResults(array $results): array
+    {
+        $collator = class_exists(\Collator::class) ? new \Collator('pt_BR') : null;
+
+        usort($results, function (array $a, array $b) use ($collator): int {
+            if ($this->sortField === 'name') {
+                $comparison = $collator instanceof \Collator
+                    ? (int) $collator->compare($a['employee']->name, $b['employee']->name)
+                    : strcasecmp($a['employee']->name, $b['employee']->name);
+            } else {
+                $comparison = $a['total_minutes'] <=> $b['total_minutes'];
+            }
+
+            return $this->sortDirection === 'asc' ? $comparison : -$comparison;
+        });
+
+        return $results;
     }
 
     // Reusa a mesma lógica de cálculo de minutos extras por dia

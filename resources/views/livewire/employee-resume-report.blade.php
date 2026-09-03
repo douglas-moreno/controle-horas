@@ -16,16 +16,30 @@
         <table class="w-full table-auto border-collapse border border-gray-200">
             <thead>
                 <tr class="bg-gray-100">
-                    <th class="p-2 text-left">Nome</th>
+                    <th class="p-2 text-left">
+                        <button type="button" class="inline-flex items-center gap-1 font-semibold hover:text-blue-700" wire:click="sortBy('name')">
+                            <span>Nome</span>
+                            @if ($sortField === 'name')
+                                <x-ui-icon name="{{ $sortDirection === 'asc' ? 'chevron-up' : 'chevron-down' }}" class="w-4 h-4" />
+                            @endif
+                        </button>
+                    </th>
                     <th class="p-2 text-center">Seg-Sex</th>
                     <th class="p-2 text-center">Sábado</th>
                     <th class="p-2 text-center">50%</th>
                     <th class="p-2 text-center">Domingo</th>
                     <th class="p-2 text-center">Feriado</th>
                     <th class="p-2 text-center">100%</th>
-                    <th class="p-2 text-end gap-2">
-                        <span>Total</span>
-                        <x-ui-button flat positive icon="document-arrow-down" wire:click="exportToExcel" />
+                    <th class="p-2 text-end">
+                        <div class="inline-flex items-center gap-2">
+                            <button type="button" class="inline-flex items-center gap-1 font-semibold hover:text-blue-700" wire:click="sortBy('total_minutes')">
+                                <span>Total</span>
+                                @if ($sortField === 'total_minutes')
+                                    <x-ui-icon name="{{ $sortDirection === 'asc' ? 'chevron-up' : 'chevron-down' }}" class="w-4 h-4" />
+                                @endif
+                            </button>
+                            <x-ui-button flat positive icon="document-arrow-down" wire:click="exportToExcel" />
+                        </div>
                     </th>
                 </tr>
             </thead>
