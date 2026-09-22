@@ -6,25 +6,25 @@
     <style>
         @page { size: A4 portrait; margin: 10mm; }
         * { box-sizing: border-box; }
-        body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #000; margin: 0; background: #fff; }
+        body { font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #000; margin: 0; background: #fff; }
         .toolbar { padding: 12px; text-align: center; background: #f3f4f6; border-bottom: 1px solid #d1d5db; }
         .toolbar button { font-size: 14px; padding: 6px 18px; cursor: pointer; }
         .sheet { padding: 10mm; page-break-after: always; break-after: page; }
         .sheet:last-child { page-break-after: auto; break-after: auto; }
         .header { border: 1px solid #000; padding: 6px 8px; margin-bottom: 6px; }
-        .header h1 { font-size: 16px; margin: 0 0 4px; text-align: center; text-transform: uppercase; }
+        .header h1 { font-size: 20px; margin: 0 0 4px; text-align: center; text-transform: uppercase; }
         .header .row { display: flex; justify-content: space-between; gap: 12px; margin-top: 2px; }
         table { width: 100%; border-collapse: collapse; }
-        th, td { border: 1px solid #000; padding: 3px 4px; text-align: center; height: 20px; }
-        th { background: #e5e7eb; text-transform: uppercase; font-size: 10px; }
-        td.date { white-space: nowrap; width: 110px; text-align: left; }
-        td.time { width: 70px; }
+        th, td { border: 1px solid #000; padding: 4px 5px; text-align: center; height: 26px; font-size: 15px; }
+        th { background: #e5e7eb; text-transform: uppercase; font-size: 13px; }
+        td.date { white-space: nowrap; width: 130px; text-align: left; font-weight: 600; }
+        td.time { width: 80px; font-weight: 600; }
         td.observation { text-align: left; }
         tr.highlighted td { background: #f3f4f6; }
-        .holiday { font-size: 9px; font-style: italic; }
+        .holiday { font-size: 11px; font-style: italic; }
         .signatures { display: flex; justify-content: space-around; margin-top: 40px; }
-        .signatures div { width: 40%; border-top: 1px solid #000; text-align: center; padding-top: 3px; }
-        .empty { padding: 40px; text-align: center; font-size: 14px; }
+        .signatures div { width: 40%; border-top: 1px solid #000; text-align: center; padding-top: 4px; font-size: 13px; }
+        .empty { padding: 40px; text-align: center; font-size: 16px; }
         th, td, tr.highlighted td { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         @media print {
             .toolbar { display: none; }
