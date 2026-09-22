@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\TimesheetPrintController;
 use App\Livewire\EmployeeCreate;
 use App\Livewire\EmployeeEdit;
 use App\Livewire\EmployeeHorasExtras;
@@ -14,6 +15,7 @@ use App\Livewire\Settings\Appearance;
 use App\Livewire\Settings\Password;
 use App\Livewire\Settings\Profile;
 use App\Livewire\Settings\TwoFactor;
+use App\Livewire\TimesheetPrint;
 use Illuminate\Support\Facades\Route;
 use Laravel\Fortify\Features;
 
@@ -55,6 +57,8 @@ Route::middleware(['auth'])->group(function () {
     Route::get('holidays/{holiday}/edit', HolidayEdit::class)->name('holidays.edit');
     Route::get('/reports/extra-hours', EmployeesExtraReport::class)->name('reports.extra-hours');
     Route::get('/reports/resume', EmployeeResumeReport::class)->name('reports.resume');
+    Route::get('/reports/timesheet', TimesheetPrint::class)->name('reports.timesheet');
+    Route::get('/reports/timesheet/print', TimesheetPrintController::class)->name('reports.timesheet.print');
 });
 
 require __DIR__.'/auth.php';
