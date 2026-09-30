@@ -645,8 +645,18 @@ describe('closing and reopening', function () {
     });
 
     describe('calculation screen', function () {
+        test('an invalidated preview shows why it was discarded', function () {
+            $this->workflow->calculate($this->september);
+            $this->workflow->invalidate($this->september);
+
+            Livewire::test(BenefitPeriodCalculation::class, ['benefitPeriod' => $this->september->fresh()])
+                ->assertSee('A apuração anterior foi descartada. Calcule novamente. Motivo: Prévia descartada por alteração na competência.')
+                ->assertDontSee('A competência ainda não foi calculada.');
+        });
+
         test('the actions follow the status', function () {
             Livewire::test(BenefitPeriodCalculation::class, ['benefitPeriod' => $this->september])
+                ->assertSee('A competência ainda não foi calculada.')
                 ->assertSee('Calcular')
                 ->assertDontSee('Recalcular')
                 ->assertDontSee('wire:click="close"', false)
@@ -701,6 +711,8 @@ describe('closing and reopening', function () {
                 ->call('reopen')
                 ->assertHasNoErrors()
                 ->assertSet('showReopenModal', false)
+                ->assertSee('A apuração anterior foi descartada. Calcule novamente. Motivo: Correção de férias.')
+                ->assertDontSee('A competência ainda não foi calculada.')
                 ->assertSee('Calcular')
                 ->assertDontSee('wire:click="openReopenModal"', false);
 

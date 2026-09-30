@@ -2,6 +2,7 @@
 
 namespace App\Livewire\Benefits;
 
+use App\Enums\BenefitPeriodStatus;
 use App\Enums\BenefitType;
 use App\Models\BenefitPeriod;
 use App\Services\BenefitPeriodCalculator;
@@ -153,6 +154,10 @@ class BenefitPeriodCalculation extends Component
 
         $issues = $period->status->isEditable() ? $calculator->issues($period) : [];
 
+        $discardedStatusChange = $period->status === BenefitPeriodStatus::Open
+            ? $period->statusChanges()->whereNotNull('from_status')->latest('id')->first()
+            : null;
+
         return view('livewire.benefits.benefit-period-calculation', [
             'period' => $period,
             'isEditable' => $period->status->isEditable(),
@@ -163,6 +168,7 @@ class BenefitPeriodCalculation extends Component
             'employeeTotals' => $employeeTotals,
             'grandTotalCents' => array_sum($totalCents),
             'issues' => $issues,
+            'discardedStatusChange' => $discardedStatusChange,
             'issueKeys' => collect($issues)
                 ->filter(fn (array $issue) => $issue['severity'] === 'blocking' && $issue['employee_id'] !== null)
                 ->map(fn (array $issue) => $issue['employee_id'].':'.$issue['benefit_type'])

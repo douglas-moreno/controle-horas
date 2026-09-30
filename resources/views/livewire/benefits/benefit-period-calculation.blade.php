@@ -48,10 +48,10 @@
         </div>
     @endif
 
-    @if ($period->status->value === 'open' && $periodEmployees->isEmpty())
-        <p class="text-gray-500">A competência ainda não foi calculada.</p>
+    @if ($discardedStatusChange !== null)
+        <p class="text-amber-700">A apuração anterior foi descartada. Calcule novamente. Motivo: {{ $discardedStatusChange->reason }}</p>
     @elseif ($period->status->value === 'open')
-        <p class="text-amber-700">A prévia anterior foi descartada. Calcule novamente.</p>
+        <p class="text-gray-500">A competência ainda não foi calculada.</p>
     @endif
 
     @if ($issues !== [])
