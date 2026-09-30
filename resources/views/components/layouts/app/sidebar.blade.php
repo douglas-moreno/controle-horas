@@ -20,6 +20,11 @@
                     <flux:navlist.item icon="printer" :href="route('reports.timesheet')" :current="request()->routeIs('reports.timesheet')" wire:navigate>{{ __('Espelho de Ponto') }}</flux:navlist.item>
                     <flux:navlist.item icon="calendar-days" :href="route('holidays.index')" :current="request()->routeIs('holidays.*')" wire:navigate>{{ __('Feriados') }}</flux:navlist.item>
                 </flux:navlist.group>
+
+                <flux:navlist.group :heading="__('Benefícios')" class="grid">
+                    <flux:navlist.item icon="banknotes" :href="route('benefits.rates.index')" :current="request()->routeIs('benefits.rates.*')" wire:navigate>{{ __('Valores VR / VD') }}</flux:navlist.item>
+                    <flux:navlist.item icon="truck" :href="route('benefits.fares.index')" :current="request()->routeIs('benefits.fares.*')" wire:navigate>{{ __('Tarifas') }}</flux:navlist.item>
+                </flux:navlist.group>
             </flux:navlist>
 
             <flux:spacer />

@@ -1,6 +1,9 @@
 <?php
 
 use App\Http\Controllers\TimesheetPrintController;
+use App\Livewire\Benefits\BenefitRateIndex;
+use App\Livewire\Benefits\TransportFareEdit;
+use App\Livewire\Benefits\TransportFareIndex;
 use App\Livewire\EmployeeCreate;
 use App\Livewire\EmployeeEdit;
 use App\Livewire\EmployeeHorasExtras;
@@ -59,6 +62,10 @@ Route::middleware(['auth'])->group(function () {
     Route::get('/reports/resume', EmployeeResumeReport::class)->name('reports.resume');
     Route::get('/reports/timesheet', TimesheetPrint::class)->name('reports.timesheet');
     Route::get('/reports/timesheet/print', TimesheetPrintController::class)->name('reports.timesheet.print');
+
+    Route::get('benefits/rates', BenefitRateIndex::class)->name('benefits.rates.index');
+    Route::get('benefits/fares', TransportFareIndex::class)->name('benefits.fares.index');
+    Route::get('benefits/fares/{transportFare}/edit', TransportFareEdit::class)->name('benefits.fares.edit');
 });
 
 require __DIR__.'/auth.php';
