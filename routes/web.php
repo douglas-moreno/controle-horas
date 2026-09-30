@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\TimesheetPrintController;
 use App\Livewire\Benefits\BenefitRateIndex;
+use App\Livewire\Benefits\EmployeeBenefitsEdit;
 use App\Livewire\Benefits\TransportFareEdit;
 use App\Livewire\Benefits\TransportFareIndex;
 use App\Livewire\EmployeeCreate;
@@ -55,6 +56,7 @@ Route::middleware(['auth'])->group(function () {
     Route::get('employees/{employee}/edit', EmployeeEdit::class)->name('employees.edit');
     Route::get('employees/{employee}/horas-extras', EmployeeHorasExtras::class)->name('employees.horas-extras');
     Route::get('employees/{employee}/points-edit/{date}', EmployeePointsEdit::class)->name('points-edit');
+    Route::get('employees/{employee}/benefits', EmployeeBenefitsEdit::class)->name('employees.benefits');
     Route::get('holidays', HolidayIndex::class)->name('holidays.index');
     Route::get('holidays/create', HolidayCreate::class)->name('holidays.create');
     Route::get('holidays/{holiday}/edit', HolidayEdit::class)->name('holidays.edit');

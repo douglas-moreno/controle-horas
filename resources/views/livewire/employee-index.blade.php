@@ -75,6 +75,7 @@
                         <td class="flex justify-center gap-2 p-2">
                             <x-ui-button class="hover:transition-all hover:duration-300 hover:scale-110" sm fuchsia wire:click="horasExtras({{ $employee }})"><x-ui-icon name="clock" class="w-4 h-4" />Horas</x-ui-button>
                             <x-ui-button class="hover:transition-all hover:duration-300 hover:scale-110" sm href="{{ route('employees.edit', $employee) }}"><x-ui-icon name="pencil" class="w-4 h-4" />Editar</x-ui-button>
+                            <x-ui-button class="hover:transition-all hover:duration-300 hover:scale-110" sm positive href="{{ route('employees.benefits', $employee) }}"><x-ui-icon name="banknotes" class="w-4 h-4" />Benefícios</x-ui-button>
                             <x-ui-button class="hover:transition-all hover:duration-300 hover:scale-110" sm red wire:click="destroy({{ $employee }})" wire:confirm="Confirma excluir registro?"><x-ui-icon name="trash" class="w-4 h-4" />Excluir</x-ui-button>
                         </td>
                     </tr>

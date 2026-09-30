@@ -3,7 +3,9 @@
 namespace App\Models;
 
 use App\Casts\DateOnly;
+use Carbon\CarbonInterface;
 use Database\Factories\TransportRouteFactory;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -32,6 +34,19 @@ class TransportRoute extends Model
             'starts_on' => DateOnly::class,
             'ends_on' => DateOnly::class,
         ];
+    }
+
+    /**
+     * Trechos vigentes na data: início até a data e fim em aberto ou a partir dela.
+     *
+     * @param  Builder<TransportRoute>  $query
+     */
+    public function scopeActiveOn(Builder $query, CarbonInterface $date): void
+    {
+        $query->where('starts_on', '<=', $date->toDateString())
+            ->where(fn (Builder $query) => $query
+                ->whereNull('ends_on')
+                ->orWhere('ends_on', '>=', $date->toDateString()));
     }
 
     /**

@@ -5,21 +5,24 @@ namespace App\Livewire;
 use App\Models\Employee;
 use App\Models\ImportedLines;
 use App\Models\Point;
+use Carbon\Carbon;
 use Livewire\Component;
 use Livewire\WithFileUploads;
 use Livewire\WithPagination;
 use WireUi\Traits\WireUiActions;
-use Carbon\Carbon;
 
 class EmployeeIndex extends Component
 {
     use WireUiActions;
-    use WithPagination;
     use WithFileUploads;
+    use WithPagination;
 
     public $search;
+
     public $filterEmployee = 'without_recision_date';
+
     public $file;
+
     public $importing = false;
 
     public function updatingSearch()
@@ -34,6 +37,15 @@ class EmployeeIndex extends Component
 
     public function destroy(Employee $employee)
     {
+        if ($employee->hasBenefitHistory()) {
+            $this->notification()->error(
+                $title = 'Exclusão Não Permitida',
+                $description = 'O funcionário possui histórico de benefícios. Informe a data de rescisão e encerre as vigências de benefício em vez de excluí-lo.'
+            );
+
+            return;
+        }
+
         $employee->delete();
 
         $this->notification()->success(
@@ -52,16 +64,16 @@ class EmployeeIndex extends Component
         try {
             ini_set('memory_limit', '512M');
             $this->importing = true;
-            
+
             // pega o limite do .env (em MB) e converte para KB para a regra 'max:'
             $maxMb = (int) env('LIVEWIRE_UPLOAD_MAX_FILESIZE', 50); // ex: 100
             $maxKb = $maxMb * 1024;
 
             $this->validate([
-                'file' => 'required|file|mimetypes:text/plain|max:' . $maxKb
+                'file' => 'required|file|mimetypes:text/plain|max:'.$maxKb,
             ]);
 
-            if (!$this->file) {
+            if (! $this->file) {
                 return;
             }
 
@@ -77,9 +89,11 @@ class EmployeeIndex extends Component
                 fgets($handle);
             }
 
-            while (!feof($handle)) {
+            while (! feof($handle)) {
                 $line = fgets($handle);
-                if (empty($line)) continue;
+                if (empty($line)) {
+                    continue;
+                }
 
                 try {
                     $data = substr($line, 10, 8);
@@ -88,7 +102,7 @@ class EmployeeIndex extends Component
 
                     $dt = Carbon::createFromFormat('dmY', $data);
                     $formattedDate = $dt->format('Y-m-d');
-                    $hora = substr($hora, 0, 2) . ':' . substr($hora, 2, 2) . ':00';
+                    $hora = substr($hora, 0, 2).':'.substr($hora, 2, 2).':00';
 
                     $batch[] = [
                         'date' => $formattedDate,
@@ -96,9 +110,9 @@ class EmployeeIndex extends Component
                         'pis' => trim($pis),
                         'type' => 'importado',
                         'created_at' => now(),
-                        'updated_at' => now()
+                        'updated_at' => now(),
                     ];
-                    
+
                     $counter++;
 
                     // Insere em lotes para economizar memória
@@ -112,7 +126,7 @@ class EmployeeIndex extends Component
             }
 
             // Insere o último lote
-            if (!empty($batch)) {
+            if (! empty($batch)) {
                 Point::insert($batch);
             }
 
@@ -124,7 +138,7 @@ class EmployeeIndex extends Component
 
             $this->notification()->success(
                 $title = 'Importação Concluída',
-                $description = $counter . ' novos pontos importados com sucesso.'
+                $description = $counter.' novos pontos importados com sucesso.'
             );
 
         } catch (\Exception $e) {
@@ -141,20 +155,20 @@ class EmployeeIndex extends Component
     public function render()
     {
         $employees = Employee::query()
-        ->when($this->filterEmployee, function ($query) {
-            if ($this->filterEmployee === 'without_recision_date') {
-                $query->whereNull('recision_date')->orWhere('recision_date', '');
-            } else {
-                $query->WhereNot('recision_date',"");
-            }
-        })->when($this->search, function ($query) {
-            $query->where(function ($q) {
-                $q->where('name', 'like', '%' . $this->search . '%')
-                  ->orWhere('pis', 'like', '%' . $this->search . '%')
-                  ->orWhere('position', 'like', '%' . $this->search . '%');
-            });
-        })->orderBy('name')
-        ->paginate(25);
+            ->when($this->filterEmployee, function ($query) {
+                if ($this->filterEmployee === 'without_recision_date') {
+                    $query->whereNull('recision_date')->orWhere('recision_date', '');
+                } else {
+                    $query->WhereNot('recision_date', '');
+                }
+            })->when($this->search, function ($query) {
+                $query->where(function ($q) {
+                    $q->where('name', 'like', '%'.$this->search.'%')
+                        ->orWhere('pis', 'like', '%'.$this->search.'%')
+                        ->orWhere('position', 'like', '%'.$this->search.'%');
+                });
+            })->orderBy('name')
+            ->paginate(25);
 
         return view('livewire.employee-index', [
             'employees' => $employees,

@@ -36,7 +36,7 @@ class TransportFarePriceResolver
     public function forDateMany(Collection $transportFares, CarbonInterface $date): Collection
     {
         $currentPrices = TransportFarePrice::query()
-            ->whereIn('transport_fare_id', $transportFares->modelKeys())
+            ->whereIn('transport_fare_id', $transportFares->map(fn (TransportFare $transportFare) => $transportFare->getKey())->all())
             ->where('valid_from', '<=', $date->toDateString())
             ->orderByDesc('valid_from')
             ->get()
