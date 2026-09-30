@@ -660,13 +660,12 @@ describe('screen', function () {
         expect($this->period->fresh()->status)->toBe(BenefitPeriodStatus::Open);
     });
 
-    test('there is no close action and a closed competence cannot be calculated from the screen', function () {
+    test('a closed competence cannot be calculated from the screen', function () {
         $this->period->forceFill(['status' => BenefitPeriodStatus::Closed])->save();
 
         Livewire::test(BenefitPeriodCalculation::class, ['benefitPeriod' => $this->period])
             ->assertDontSee('wire:click="calculate"', false)
-            ->assertDontSee('Fechar')
-            ->assertDontSee('Reabrir');
+            ->assertSee('wire:click="openReopenModal"', false);
     });
 
     test('the periods list links to the calculation screen', function () {

@@ -2,6 +2,7 @@
 
 namespace App\Livewire\Benefits;
 
+use App\Models\BenefitPeriod;
 use App\Models\TransportFare;
 use App\Models\TransportFarePrice;
 use App\Services\Money;
@@ -80,6 +81,7 @@ class TransportFareEdit extends Component
 
     /**
      * Um novo preço é sempre uma nova linha: o preço anterior permanece no histórico.
+     * Preços com início até a última competência fechada são imutáveis (guarda no model).
      */
     public function createPrice(): void
     {
@@ -135,6 +137,7 @@ class TransportFareEdit extends Component
             'prices' => $this->transportFare->prices()->orderByDesc('valid_from')->get(),
             'currentPrice' => app(TransportFarePriceResolver::class)->forDate($this->transportFare, $today),
             'today' => $today,
+            'lastClosedCompetence' => BenefitPeriod::lastClosedCompetence(),
         ]);
     }
 }

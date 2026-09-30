@@ -44,13 +44,13 @@ class BenefitRateRegistrar
     }
 
     /**
-     * Uma vigência só pode ser excluída enquanto nenhum cálculo a utilizou.
-     *
-     * TODO F9: incluir a regra de imutabilidade de vigências anteriores à última
-     * competência fechada, quando o fechamento existir.
+     * Uma vigência só pode ser excluída enquanto nenhum cálculo a utilizou e enquanto
+     * não fizer parte do histórico de uma competência fechada (início até 01 da última
+     * competência fechada).
      */
     public function canDelete(BenefitRate $benefitRate): bool
     {
-        return ! $benefitRate->calculations()->exists();
+        return ! $benefitRate->isProtectedByClosedPeriod()
+            && ! $benefitRate->calculations()->exists();
     }
 }

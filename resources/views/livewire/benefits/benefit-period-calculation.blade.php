@@ -17,11 +17,36 @@
         <div class="flex gap-2">
             <x-ui-button warning href="{{ route('benefits.periods.adjustments', $period) }}" icon="adjustments-horizontal">Ajustes</x-ui-button>
             <x-ui-button warning href="{{ route('benefits.periods.index') }}" icon="arrow-left">Voltar para Competências</x-ui-button>
-            @if ($isEditable)
-                <x-ui-button primary icon="calculator" wire:click="calculate">Calcular</x-ui-button>
-            @endif
+            @switch($period->status->value)
+                @case('open')
+                    <x-ui-button primary icon="calculator" wire:click="calculate">Calcular</x-ui-button>
+                    @break
+                @case('calculated')
+                    <x-ui-button primary icon="calculator" wire:click="calculate">Recalcular</x-ui-button>
+                    <x-ui-button positive icon="lock-closed" wire:click="close" wire:confirm="Fechar a competência {{ $period->competence->format('m/Y') }}? A apuração será recalculada e congelada.">Fechar</x-ui-button>
+                    @break
+                @default
+                    <x-ui-button negative icon="lock-open" wire:click="openReopenModal">Reabrir</x-ui-button>
+            @endswitch
         </div>
     </div>
+
+    @if ($period->status->value === 'closed')
+        <div class="rounded border border-green-300 bg-green-50 p-3 text-green-800">
+            Competência fechada em {{ $period->closed_at?->format('d/m/Y H:i') }}. O resultado está congelado: ajustes, apuração e valores usados não podem ser alterados. Para corrigir, reabra a competência informando o motivo.
+        </div>
+    @endif
+
+    @if ($closeBlockers !== [])
+        <div class="rounded border border-red-300 bg-red-50 p-4">
+            <h2 class="text-lg font-semibold text-red-800">Não é possível fechar a competência.</h2>
+            <ul class="mt-2 list-disc pl-5 text-red-800">
+                @foreach ($closeBlockers as $blocker)
+                    <li wire:key="close-blocker-{{ $loop->index }}">{{ $blocker }}</li>
+                @endforeach
+            </ul>
+        </div>
+    @endif
 
     @if ($period->status->value === 'open' && $periodEmployees->isEmpty())
         <p class="text-gray-500">A competência ainda não foi calculada.</p>
@@ -139,4 +164,19 @@
             @endif
         </table>
     </div>
+
+    <x-ui-modal-card wire:model="showReopenModal" title="Reabrir Competência {{ $period->competence->format('m/Y') }}">
+        <div class="space-y-4">
+            <p class="text-sm text-gray-500">
+                A competência volta para Aberta e a apuração fechada é descartada. Se a competência seguinte estiver calculada, a prévia dela também é descartada. O motivo fica registrado no histórico.
+            </p>
+            <x-ui-textarea wire:model="reopenReason" label="Motivo da reabertura" />
+        </div>
+        <x-slot name="footer">
+            <div class="flex justify-end space-x-2">
+                <x-ui-button secondary wire:click="$set('showReopenModal', false)" label="Cancelar" />
+                <x-ui-button negative wire:click="reopen" label="Confirmar reabertura" />
+            </div>
+        </x-slot>
+    </x-ui-modal-card>
 </div>

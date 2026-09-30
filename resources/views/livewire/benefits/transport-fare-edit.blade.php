@@ -47,6 +47,9 @@
                             @else
                                 <x-ui-badge label="Encerrado" color="gray" />
                             @endif
+                            @if ($lastClosedCompetence && $price->valid_from->lessThanOrEqualTo($lastClosedCompetence))
+                                <x-ui-badge label="Competência fechada" color="gray" />
+                            @endif
                         </td>
                         <td class="text-lg p-2 text-center">{{ $price->created_at?->format('d/m/Y H:i') }}</td>
                     </tr>

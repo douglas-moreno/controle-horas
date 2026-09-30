@@ -68,6 +68,19 @@ class BenefitPeriod extends Model
     }
 
     /**
+     * Data de referência (01/M) da competência fechada mais recente. Vigências de
+     * valores e preços com início até essa data fazem parte de resultados fechados.
+     */
+    public static function lastClosedCompetence(): ?CarbonImmutable
+    {
+        $competence = static::query()
+            ->where('status', BenefitPeriodStatus::Closed)
+            ->max('competence');
+
+        return $competence === null ? null : CarbonImmutable::parse(substr((string) $competence, 0, 10));
+    }
+
+    /**
      * Classe temporal de um intervalo em relação à competência: previsto (mês M),
      * realizado (janela M−1) ou correção retroativa (antes da janela). Retorna null
      * quando o intervalo é posterior à competência ou atravessa mais de uma classe.

@@ -3,6 +3,7 @@
 namespace App\Livewire\Benefits;
 
 use App\Enums\BenefitType;
+use App\Models\BenefitPeriod;
 use App\Models\BenefitRate;
 use App\Services\BenefitRateRegistrar;
 use App\Services\BenefitRateResolver;
@@ -83,7 +84,7 @@ class BenefitRateIndex extends Component
         if (! $registrar->canDelete($benefitRate)) {
             $this->notification()->error(
                 $title = 'Exclusão Não Permitida',
-                $description = 'Esta vigência já foi utilizada em um cálculo e faz parte do histórico.'
+                $description = 'Esta vigência já foi utilizada em um cálculo ou faz parte de uma competência fechada. Cadastre uma nova vigência.'
             );
 
             return;
@@ -115,6 +116,7 @@ class BenefitRateIndex extends Component
             'rates' => $rates,
             'currentRates' => $currentRates,
             'today' => $today,
+            'lastClosedCompetence' => BenefitPeriod::lastClosedCompetence(),
             'benefitTypeOptions' => [
                 ['id' => BenefitType::Vr->value, 'name' => BenefitType::Vr->label()],
                 ['id' => BenefitType::Vd->value, 'name' => BenefitType::Vd->label()],

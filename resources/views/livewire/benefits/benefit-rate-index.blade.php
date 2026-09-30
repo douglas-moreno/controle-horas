@@ -54,9 +54,11 @@
                             @endif
                         </td>
                         <td class="flex justify-center gap-2 p-2">
-                            @unless ($rate->calculations_exists)
+                            @if ($lastClosedCompetence && $rate->valid_from->lessThanOrEqualTo($lastClosedCompetence))
+                                <x-ui-badge label="Competência fechada" color="gray" />
+                            @elseif (! $rate->calculations_exists)
                                 <x-ui-button class="hover:transition-all hover:duration-300 hover:scale-110" sm red wire:click="destroy({{ $rate->id }})" wire:confirm="Confirma excluir esta vigência?"><x-ui-icon name="trash" class="w-4 h-4" />Excluir</x-ui-button>
-                            @endunless
+                            @endif
                         </td>
                     </tr>
                 @empty
