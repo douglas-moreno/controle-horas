@@ -13,13 +13,15 @@ use Illuminate\Support\Facades\DB;
 /**
  * Ciclo de vida da competência: Open → Calculated → Closed, com reabertura para Open.
  *
- * Nesta fase: criação em sequência, invalidação da prévia (Calculated → Open) e
- * exclusão. Cálculo, fechamento e reabertura entram nas fases seguintes e devem usar
- * changeStatus() para manter o histórico. Violações de regra lançam DomainException
- * com mensagem para o usuário.
+ * Implementado: criação em sequência, cálculo (Open/Calculated → Calculated),
+ * invalidação da prévia (Calculated → Open) e exclusão. Fechamento e reabertura
+ * entram na fase seguinte e devem usar changeStatus() para manter o histórico.
+ * Violações de regra lançam DomainException com mensagem para o usuário.
  */
 class BenefitPeriodWorkflow
 {
+    public function __construct(private BenefitPeriodCalculator $calculator) {}
+
     /**
      * Cria a próxima competência: o mês seguinte à última existente ou, quando não há
      * nenhuma, a primeira competência informada explicitamente.
@@ -48,6 +50,44 @@ class BenefitPeriodWorkflow
         } catch (UniqueConstraintViolationException) {
             throw new DomainException('Esta competência já foi criada. Atualize a lista e tente novamente.');
         }
+    }
+
+    /**
+     * Calcula (ou recalcula) a prévia da competência e a deixa em Calculated.
+     * Exige competência não fechada e, se existir, a competência anterior fechada.
+     *
+     * @return array{issues: list<array{severity: string, employee_id: ?int, benefit_type: ?string, message: string}>}
+     *
+     * @throws DomainException quando o cálculo não é permitido ou está bloqueado
+     */
+    public function calculate(BenefitPeriod $period): array
+    {
+        return DB::transaction(function () use ($period) {
+            $period = BenefitPeriod::query()->lockForUpdate()->findOrFail($period->id);
+
+            if ($period->status === BenefitPeriodStatus::Closed) {
+                throw new DomainException('A competência '.$period->competence->format('m/Y').' está fechada e só pode ser recalculada após reabertura.');
+            }
+
+            $previous = BenefitPeriod::query()
+                ->where('competence', $period->referenceDate()->subMonthNoOverflow()->toDateString())
+                ->first();
+
+            if ($previous !== null && $previous->status !== BenefitPeriodStatus::Closed) {
+                throw new DomainException('A competência anterior ('.$previous->competence->format('m/Y').') precisa estar fechada antes do cálculo de '.$period->competence->format('m/Y').'.');
+            }
+
+            $wasCalculated = $period->status === BenefitPeriodStatus::Calculated;
+
+            $result = $this->calculator->calculate($period);
+
+            $period->calculated_at = now();
+            $period->calculated_by = auth()->id();
+
+            $this->changeStatus($period, BenefitPeriodStatus::Calculated, $wasCalculated ? 'Prévia recalculada.' : 'Prévia calculada.');
+
+            return $result;
+        });
     }
 
     /**

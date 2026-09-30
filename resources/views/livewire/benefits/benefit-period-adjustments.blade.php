@@ -18,6 +18,7 @@
             </div>
         </div>
         <div class="flex gap-2">
+            <x-ui-button warning href="{{ route('benefits.periods.calculation', $period) }}" icon="calculator">Apuração</x-ui-button>
             <x-ui-button warning href="{{ route('benefits.periods.index') }}" icon="arrow-left">Voltar para Competências</x-ui-button>
             @if ($isEditable)
                 <x-ui-button class="transition-all hover:duration-300 hover:scale-110" icon="plus" wire:click="openCreateModal">Novo ajuste</x-ui-button>

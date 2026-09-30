@@ -44,6 +44,7 @@
                         <td class="text-lg p-2 text-center">{{ $period->closed_at?->format('d/m/Y H:i') ?? '—' }}</td>
                         <td class="flex justify-center gap-2 p-2">
                             <x-ui-button class="hover:transition-all hover:duration-300 hover:scale-110" sm href="{{ route('benefits.periods.adjustments', $period) }}"><x-ui-icon name="adjustments-horizontal" class="w-4 h-4" />Ajustes</x-ui-button>
+                            <x-ui-button class="hover:transition-all hover:duration-300 hover:scale-110" sm href="{{ route('benefits.periods.calculation', $period) }}"><x-ui-icon name="calculator" class="w-4 h-4" />Apuração</x-ui-button>
                             @if (in_array($period->id, $deletablePeriodIds, true))
                                 <x-ui-button
                                     class="hover:transition-all hover:duration-300 hover:scale-110"

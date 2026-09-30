@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\TimesheetPrintController;
 use App\Livewire\Benefits\BenefitPeriodAdjustments;
+use App\Livewire\Benefits\BenefitPeriodCalculation;
 use App\Livewire\Benefits\BenefitPeriodIndex;
 use App\Livewire\Benefits\BenefitRateIndex;
 use App\Livewire\Benefits\EmployeeBenefitsEdit;
@@ -69,6 +70,7 @@ Route::middleware(['auth'])->group(function () {
 
     Route::get('benefits/periods', BenefitPeriodIndex::class)->name('benefits.periods.index');
     Route::get('benefits/periods/{benefitPeriod}/adjustments', BenefitPeriodAdjustments::class)->name('benefits.periods.adjustments');
+    Route::get('benefits/periods/{benefitPeriod}/calculation', BenefitPeriodCalculation::class)->name('benefits.periods.calculation');
     Route::get('benefits/rates', BenefitRateIndex::class)->name('benefits.rates.index');
     Route::get('benefits/fares', TransportFareIndex::class)->name('benefits.fares.index');
     Route::get('benefits/fares/{transportFare}/edit', TransportFareEdit::class)->name('benefits.fares.edit');

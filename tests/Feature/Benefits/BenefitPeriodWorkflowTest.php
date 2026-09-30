@@ -17,7 +17,7 @@ uses(RefreshDatabase::class);
 beforeEach(function () {
     $this->user = User::factory()->create();
     $this->actingAs($this->user);
-    $this->workflow = new BenefitPeriodWorkflow;
+    $this->workflow = app(BenefitPeriodWorkflow::class);
 });
 
 describe('creation', function () {
