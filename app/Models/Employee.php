@@ -23,4 +23,48 @@ class Employee extends Model
     {
         return $this->hasMany(Point::class, 'pis', 'pis');
     }
+
+    /**
+     * @return HasMany<EmployeeBenefit, $this>
+     */
+    public function employeeBenefits(): HasMany
+    {
+        return $this->hasMany(EmployeeBenefit::class);
+    }
+
+    /**
+     * @return HasMany<TransportRoute, $this>
+     */
+    public function transportRoutes(): HasMany
+    {
+        return $this->hasMany(TransportRoute::class);
+    }
+
+    /**
+     * @return HasMany<BenefitAdjustment, $this>
+     */
+    public function benefitAdjustments(): HasMany
+    {
+        return $this->hasMany(BenefitAdjustment::class);
+    }
+
+    /**
+     * @return HasMany<BenefitPeriodEmployee, $this>
+     */
+    public function benefitPeriodEmployees(): HasMany
+    {
+        return $this->hasMany(BenefitPeriodEmployee::class);
+    }
+
+    /**
+     * Indica se o funcionário possui registros do módulo de benefícios, que impedem a
+     * exclusão física. Batidas de ponto não contam como histórico de benefício.
+     */
+    public function hasBenefitHistory(): bool
+    {
+        return $this->employeeBenefits()->exists()
+            || $this->transportRoutes()->exists()
+            || $this->benefitAdjustments()->exists()
+            || $this->benefitPeriodEmployees()->exists();
+    }
 }

@@ -16,14 +16,14 @@ final class Money
     private const MAX_INTEGER_DIGITS = 15;
 
     /**
-     * Converte "5.40" em 540. Inteiros são tratados como valor em reais (5 → 500).
+     * Converte "5.40" em 540. Inteiros já são centavos e retornam inalterados.
      *
      * @throws InvalidArgumentException quando o formato é inválido ou há mais de duas casas decimais
      */
     public static function toCents(string|int $amount): int
     {
         if (is_int($amount)) {
-            return $amount * 100;
+            return $amount;
         }
 
         if (preg_match('/^(-?)(\d+)(?:\.(\d+))?$/', $amount, $matches) !== 1) {

@@ -19,10 +19,14 @@ test('decimal strings are converted to exact cents', function (string $amount, i
     'negative zero' => ['-0.00', 0],
 ]);
 
-test('integers are treated as whole amounts', function () {
-    expect(Money::toCents(5))->toBe(500)
+test('integers are already cents and are returned unchanged', function () {
+    expect(Money::toCents(540))->toBe(540)
         ->and(Money::toCents(0))->toBe(0)
-        ->and(Money::toCents(-3))->toBe(-300);
+        ->and(Money::toCents(-305))->toBe(-305);
+});
+
+test('integer cents round trip through the decimal representation', function () {
+    expect(Money::toCents(Money::fromCents(Money::toCents(1032))))->toBe(1032);
 });
 
 test('cents are converted back to a two decimal string', function (int $cents, string $expectedAmount) {
