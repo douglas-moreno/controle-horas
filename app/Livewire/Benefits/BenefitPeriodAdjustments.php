@@ -12,6 +12,7 @@ use App\Models\BenefitPeriod;
 use App\Models\Employee;
 use App\Services\BenefitAdjustmentRegistrar;
 use App\Services\BusinessCalendar;
+use App\Services\TimesheetAdjustmentSuggester;
 use Carbon\CarbonImmutable;
 use DomainException;
 use Illuminate\Contracts\View\View;
@@ -75,6 +76,13 @@ class BenefitPeriodAdjustments extends Component
     public array $rejectingIds = [];
 
     public string $rejectNotes = '';
+
+    /**
+     * Resumo da última geração de sugestões do ponto nesta tela.
+     *
+     * @var array{created: int, skipped_existing: int, skipped_covered: int}|null
+     */
+    public ?array $generationSummary = null;
 
     public function mount(BenefitPeriod $benefitPeriod): void
     {
@@ -230,7 +238,30 @@ class BenefitPeriodAdjustments extends Component
         $this->runAction(fn () => $registrar->reconsider($this->findAdjustment($adjustmentId)), 'Ajuste Reconsiderado', 'O ajuste #'.$adjustmentId.' voltou para pendente.');
     }
 
-    public function render(BenefitAdjustmentRegistrar $registrar, BusinessCalendar $calendar): View
+    public function generateSuggestions(TimesheetAdjustmentSuggester $suggester): void
+    {
+        try {
+            $this->generationSummary = $suggester->generate($this->benefitPeriod);
+        } catch (DomainException $exception) {
+            $this->notification()->error(
+                $title = 'Sugestões Não Geradas',
+                $description = $exception->getMessage()
+            );
+
+            return;
+        }
+
+        $this->benefitPeriod->refresh();
+
+        $this->notification()->success(
+            $title = 'Sugestões do Ponto',
+            $description = 'Sugestões geradas: '.$this->generationSummary['created']
+                .'. Já existentes: '.$this->generationSummary['skipped_existing']
+                .'. Ignoradas por cobertura: '.$this->generationSummary['skipped_covered'].'.'
+        );
+    }
+
+    public function render(BenefitAdjustmentRegistrar $registrar, BusinessCalendar $calendar, TimesheetAdjustmentSuggester $suggester): View
     {
         $period = $this->benefitPeriod;
 
@@ -258,6 +289,9 @@ class BenefitPeriodAdjustments extends Component
             'sections' => $sections,
             'alerts' => $registrar->alertsFor($period, $adjustments),
             'benefitTypes' => BenefitType::cases(),
+            'lastImportedPointDate' => $suggester->lastImportedPointDate(),
+            'generationBlocker' => $suggester->generationBlocker($period),
+            'conflicts' => $suggester->conflicts($period),
             'formPreview' => $this->showFormModal ? $this->formPreview($registrar) : null,
             'employeeOptions' => Employee::query()->orderBy('name')->get(['id', 'name'])
                 ->map(fn (Employee $employee) => ['id' => $employee->id, 'name' => $employee->name])

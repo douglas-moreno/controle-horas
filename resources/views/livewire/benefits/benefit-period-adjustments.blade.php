@@ -14,6 +14,7 @@
                         {{ $calendarBusinessDays }} (pelo calendário atual; congelado no cálculo)
                     @endif
                 </span>
+                <span>Última batida importada: {{ $lastImportedPointDate?->format('d/m/Y') ?? 'nenhuma' }}</span>
             </div>
         </div>
         <div class="flex gap-2">
@@ -37,6 +38,48 @@
     <p class="text-sm text-gray-500">
         Ajustes não são excluídos: para cancelar um lançamento, rejeite-o com uma nota. O histórico é preservado para auditoria.
     </p>
+
+    @if ($isEditable)
+        <div class="rounded border border-gray-200 p-4">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                    <h2 class="text-lg font-semibold">Sugestões do ponto</h2>
+                    <p class="text-sm text-gray-500">
+                        Analisa as batidas de {{ $period->windowStart()->format('d/m/Y') }} a {{ $period->windowEnd()->format('d/m/Y') }}: dia útil sem batida sugere ausência; sábado, domingo ou feriado com batida sugere dia trabalhado. As sugestões entram como pendentes.
+                    </p>
+                </div>
+                <x-ui-button primary icon="arrow-path" wire:click="generateSuggestions" :disabled="$generationBlocker !== null">Gerar sugestões do ponto</x-ui-button>
+            </div>
+            @if ($generationBlocker !== null)
+                <div class="mt-2 text-sm text-red-700">{{ $generationBlocker }}</div>
+            @endif
+            @if ($generationSummary !== null)
+                <div class="mt-2 text-sm">
+                    Sugestões geradas: {{ $generationSummary['created'] }} ·
+                    Já existentes: {{ $generationSummary['skipped_existing'] }} ·
+                    Ignoradas por cobertura: {{ $generationSummary['skipped_covered'] }}
+                </div>
+            @endif
+        </div>
+    @endif
+
+    <div class="rounded border border-gray-200 p-4">
+        <h2 class="text-lg font-semibold">Conflitos para revisão</h2>
+        @forelse ($conflicts as $conflict)
+            <div class="mt-1 text-sm {{ in_array($conflict['type'], ['absence_with_punch', 'work_on_absence', 'duplicated_pis'], true) ? 'text-amber-800' : 'text-blue-800' }}" wire:key="conflict-{{ $loop->index }}">
+                {{ match ($conflict['type']) {
+                    'absence_with_punch' => 'Ausência com batida',
+                    'work_on_absence' => 'Trabalho em dia de ausência',
+                    'employee_rescinded' => 'Funcionário com rescisão',
+                    'unknown_pis' => 'PIS desconhecido',
+                    'duplicated_pis' => 'PIS duplicado',
+                    default => 'Conflito',
+                } }}: {{ $conflict['message'] }}
+            </div>
+        @empty
+            <p class="mt-1 text-sm text-gray-500">Nenhum conflito encontrado.</p>
+        @endforelse
+    </div>
 
     <div class="grid gap-4 md:grid-cols-4">
         <x-ui-select wire:model.live="filterEmployeeId" :options="$employeeOptions" option-label="name" option-value="id" label="Funcionário" placeholder="Todos" />
