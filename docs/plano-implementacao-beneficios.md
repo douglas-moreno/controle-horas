@@ -712,6 +712,19 @@ Cada fase termina com: testes da fase verdes, suíte existente verde, `vendor/bi
 - **Testes:** G-ALL (Σ 45.000,84).
 - **Conclusão:** totais idênticos à planilha; checklist de implantação pronto.
 
+#### Resultado F10 e checklist de implantação
+
+**Golden Dataset:** os 42 cenários (linhas 5–46) estão em `GoldenDatasetSeptember2026Test` (G1–G12 preservados; G13–G42 nas demais linhas, em ordem). G-ALL reproduz AA47 = 14.935,84, AB47 = 30.065,00 e AD47 = 45.000,84, com valores individuais conferidos. Transcrição feita por script contra as fórmulas das duas abas (Σ tarifa × viagens/dia × dias = coluna W de cada linha). Única correção: a *carga* do cenário G11 (linha 39) usava CPTM/SP/UNI ABC; a planilha usa UNI ABC×2 + TROLEBUS×2 + RGS TLM×2 (valor unitário 35,10). Resultado esperado inalterado (0 dias).
+
+**Catálogo (`BenefitCatalogSeeder`, idempotente, `firstOrCreate`, não integrado ao `DatabaseSeeder`):** 20 tarifas com os preços da linha 4 e VR 27,50 / VD 7,50, todos com vigência 01/09/2026. Executar com `php artisan db:seed --class=BenefitCatalogSeeder`. Duplicatas (OI-4): `CMT BOM 1` (coluna D) e `CMT BOM 2` (coluna E, usada nas linhas 31 e 35), `INTEGRAÇÃO 1,10` e `INTEGRAÇÃO 1,40`. `MUN\nMAUÁ` gravado como `MUN MAUÁ`.
+
+Checklist antes da primeira competência real:
+
+1. [ ] Rodar `BenefitCatalogSeeder` no banco de produção e conferir as 20 tarifas na tela de tarifas (nomes `CMT BOM 1/2` podem ser renomeados pelo administrador; o nome não entra no cálculo).
+2. [ ] Feriados (OI-5): 07/09/2026 cadastrado no banco local. Confirmar e cadastrar pelo CRUD, a partir de fonte oficial, os feriados nacionais restantes de 2026 (02/11, 15/11, 20/11, 25/12) e de 2027, o estadual (09/07) e os **municipais** da empresa (fonte não disponível na análise). Pontos facultativos (Carnaval, Corpus Christi) dependem de decisão da empresa.
+3. [ ] Funcionários (OI-3): vincular manualmente cada linha da planilha pela tela `EmployeeBenefitsEdit` (elegibilidade VT/VR/VD vigente em 01/09/2026 e itinerários). Sem chave comum verificável: linhas 6, 7, 10, 24, 31, 33, 38 e 45 sem código na aba principal; linhas 45 e 46 sem código e sem CPF (prováveis placeholders — somam 1.470,00 de VR+VD no total da planilha); nomes divergem entre abas nas linhas 12, 19, 22, 23, 26 e 38. Administrador confirma quais linhas são reais.
+4. [ ] Após a carga, apurar 09/2026 e conferir os totais com AA47/AB47/AD47 (diferença esperada apenas pelas linhas confirmadas como placeholders).
+
 ### F11 — Acabamento
 - **Objetivo:** navegação final, textos, Pint, suíte completa, rodada em MySQL.
 - **Conclusão:** `php artisan test --compact` verde em SQLite e MySQL.
@@ -839,9 +852,9 @@ Somente questões descobertas na análise que afetam a implementação. Nenhuma 
 |---|---|---|---|---|
 | OI-1 | A planilha calcula "Desc Folha VR-10%" (coluna AC) e o recibo mostra "participação 10%" do VR. A especificação exclui 6% do VT e integração com folha, mas não menciona o 10% do VR. | Planilha §9.4 DV-3 | Não altera valores pagos; decide se a tela de apuração mostra uma coluna informativa. | Tratar como fora do escopo (analogia a R29). **Confirmar antes de F8.** |
 | OI-2 | Coluna Z (Afastamento) da planilha desconta só VD; a especificação desconta os três. | Planilha §9.4 DV-1 | Sem efeito em set/2026. | Especificação prevalece (R9). Registrado para ciência; nenhuma ação. |
-| OI-3 | Mapeamento dos 42 funcionários da planilha para `employees` (sem PIS na planilha; códigos inconsistentes; possíveis linhas fictícias). | Planilha §9.4 DV-7 | Bloqueia a carga inicial real (F10), não o desenvolvimento. | Carga via tela com conferência; administrador confirma quais linhas são reais. |
-| OI-4 | Nomes repetidos no catálogo de tarifas ("CMT BOM", "INTEGRAÇÃO"). | Planilha §9.4 DV-6 | Bloqueia a carga por UNIQUE(`name`). | Administrador define nomes distintos na carga. |
-| OI-5 | Feriados de 2026–2027 ausentes no sistema. | Banco local | Bloqueia Golden Dataset e primeira competência real. | Cadastro prévio pelo CRUD existente. |
+| OI-3 | Mapeamento dos 42 funcionários da planilha para `employees` (sem PIS na planilha; códigos inconsistentes; possíveis linhas fictícias). | Planilha §9.4 DV-7 | Bloqueia a carga inicial real (F10), não o desenvolvimento. | Carga via tela com conferência; administrador confirma quais linhas são reais. **F10: pendente** (sem correspondência verificável; ver checklist F10). |
+| OI-4 | Nomes repetidos no catálogo de tarifas ("CMT BOM", "INTEGRAÇÃO"). | Planilha §9.4 DV-6 | Bloqueia a carga por UNIQUE(`name`). | Administrador define nomes distintos na carga. **F10: resolvido** (`CMT BOM 1/2`, `INTEGRAÇÃO 1,10/1,40`). |
+| OI-5 | Feriados de 2026–2027 ausentes no sistema. | Banco local | Bloqueia Golden Dataset e primeira competência real. | Cadastro prévio pelo CRUD existente. **F10: parcial** (07/09/2026 cadastrado; demais conforme checklist F10). |
 
 ---
 
