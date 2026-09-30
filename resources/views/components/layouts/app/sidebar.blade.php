@@ -22,6 +22,7 @@
                 </flux:navlist.group>
 
                 <flux:navlist.group :heading="__('Benefícios')" class="grid">
+                    <flux:navlist.item icon="calendar" :href="route('benefits.periods.index')" :current="request()->routeIs('benefits.periods.*')" wire:navigate>{{ __('Competências') }}</flux:navlist.item>
                     <flux:navlist.item icon="banknotes" :href="route('benefits.rates.index')" :current="request()->routeIs('benefits.rates.*')" wire:navigate>{{ __('Valores VR / VD') }}</flux:navlist.item>
                     <flux:navlist.item icon="truck" :href="route('benefits.fares.index')" :current="request()->routeIs('benefits.fares.*')" wire:navigate>{{ __('Tarifas') }}</flux:navlist.item>
                 </flux:navlist.group>

@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Casts\DateOnly;
 use App\Enums\BenefitPeriodStatus;
+use Carbon\CarbonImmutable;
 use Database\Factories\BenefitPeriodFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -32,6 +33,36 @@ class BenefitPeriod extends Model
             'calculated_at' => 'immutable_datetime',
             'closed_at' => 'immutable_datetime',
         ];
+    }
+
+    /**
+     * Data de referência da competência (01/M): define todas as vigências.
+     */
+    public function referenceDate(): CarbonImmutable
+    {
+        return $this->competence->startOfMonth();
+    }
+
+    public function monthEnd(): CarbonImmutable
+    {
+        return $this->competence->endOfMonth()->startOfDay();
+    }
+
+    /**
+     * Início da janela de eventos realizados: 01 do mês anterior à competência.
+     * A janela é derivada da competência e não é armazenada.
+     */
+    public function windowStart(): CarbonImmutable
+    {
+        return $this->competence->startOfMonth()->subMonthNoOverflow();
+    }
+
+    /**
+     * Fim da janela de eventos realizados: último dia do mês anterior à competência.
+     */
+    public function windowEnd(): CarbonImmutable
+    {
+        return $this->competence->startOfMonth()->subDay();
     }
 
     /**

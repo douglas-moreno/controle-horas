@@ -7,6 +7,7 @@ use Database\Factories\BenefitPeriodStatusChangeFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use LogicException;
 
 class BenefitPeriodStatusChange extends Model
 {
@@ -24,6 +25,16 @@ class BenefitPeriodStatusChange extends Model
         'to_status',
         'reason',
     ];
+
+    /**
+     * O histórico é somente de inserção: registros existentes não são alterados nem
+     * excluídos individualmente. A remoção só ocorre em cascata com a competência.
+     */
+    protected static function booted(): void
+    {
+        static::updating(fn () => throw new LogicException('O histórico de status da competência não pode ser alterado.'));
+        static::deleting(fn () => throw new LogicException('O histórico de status da competência não pode ser excluído.'));
+    }
 
     /**
      * @return array<string, string>
