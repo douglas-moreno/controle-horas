@@ -296,6 +296,11 @@ class BenefitPeriodAdjustments extends Component
             'employeeOptions' => Employee::query()->orderBy('name')->get(['id', 'name'])
                 ->map(fn (Employee $employee) => ['id' => $employee->id, 'name' => $employee->name])
                 ->all(),
+            'filterEmployeeOptions' => Employee::query()
+                ->where(fn ($query) => $query->whereNull('recision_date')->orWhere('recision_date', ''))
+                ->orderBy('name')->get(['id', 'name'])
+                ->map(fn (Employee $employee) => ['id' => $employee->id, 'name' => $employee->name])
+                ->all(),
             'reasonOptions' => collect(AdjustmentReason::cases())
                 ->map(fn (AdjustmentReason $reason) => ['id' => $reason->value, 'name' => $reason->label()])
                 ->all(),

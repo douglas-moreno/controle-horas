@@ -107,6 +107,15 @@ test('filters narrow the list', function () {
         ->and($ids(($this->screen)()->set('filterStatus', 'rejected')))->toBe([$rejected->id]);
 });
 
+test('the employee filter lists only active employees', function () {
+    $terminated = Employee::factory()->terminated()->create(['name' => 'Diego Rocha']);
+
+    $filterIds = collect(($this->screen)()->viewData('filterEmployeeOptions'))->pluck('id');
+
+    expect($filterIds)->toContain($this->employee->id)
+        ->not->toContain($terminated->id);
+});
+
 test('the new adjustment button opens the form', function () {
     ($this->screen)()
         ->assertSee('Novo ajuste')

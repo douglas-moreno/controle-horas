@@ -83,7 +83,7 @@
     </div>
 
     <div class="grid gap-4 md:grid-cols-4">
-        <x-ui-select wire:model.live="filterEmployeeId" :options="$employeeOptions" option-label="name" option-value="id" label="Funcionário" placeholder="Todos" />
+        <x-ui-select wire:model.live="filterEmployeeId" :options="$filterEmployeeOptions" option-label="name" option-value="id" label="Funcionário" placeholder="Todos" />
         <x-ui-select wire:model.live="filterReason" :options="$reasonOptions" option-label="name" option-value="id" label="Motivo" placeholder="Todos" />
         <x-ui-select wire:model.live="filterSource" :options="$sourceOptions" option-label="name" option-value="id" label="Origem" placeholder="Todas" />
         <x-ui-select wire:model.live="filterStatus" :options="$statusOptions" option-label="name" option-value="id" label="Status" placeholder="Todos" />
