@@ -5,7 +5,7 @@
 | Base | `docs/modulo-beneficios-vt-vr-vd.md` — versão 3.0 (Especificação definitiva) |
 | Data | 29/09/2026 |
 | Fontes analisadas | Código do projeto (branch `main`, commit `145278e`), banco SQLite local (somente leitura), planilha `VT e VR -09.2026.xlsx` (somente leitura) |
-| Status | Plano — nada foi implementado |
+| Status | F0–F11 implementadas · F12/S1 (geração incremental), F12/S2 (conflitos após correções no ponto) e F12/S3 (compensação entre competências) implementadas em 20/10/2026 |
 
 > Convenção de referência: "Spec §N" = seção N da especificação 3.0. "Rn" = regra Rn da especificação.
 > A planilha contém dados pessoais (CPF, dados bancários). Este documento os omite; cenários são referenciados pela **linha** da aba `Controle VT-VR`.
@@ -118,7 +118,7 @@ tests/Feature/*.php, tests/Unit/ExampleTest.php
 | Relacionamento | `employee(): BelongsTo` por `pis` → `pis`. **Confirmado: `Employee → Point` é por PIS, não por `id`.** |
 | Índices | Nenhum (apenas PK). |
 | Importação | `EmployeeIndex::importPoints()`: arquivo AFD texto de largura fixa; data `substr(10,8)`, hora `substr(18,4)`, PIS `substr(23,12)`; controle incremental por `ImportedLines.line_number`; inserção em lote com `type = 'importado'`. |
-| Registro manual | `EmployeePointsEdit::saveNewPoint()` → `type = 'manual'`; exclusão física por `removePoint()`. |
+| Registro manual | `EmployeePointsEdit::saveNewPoint()` → `type = 'manual'`; exclusão física por `removePoint()` (desde a F12/S2 somente de batidas manuais do funcionário e da data da tela). |
 | Processamento | `EmployeeHorasExtras`, `EmployeeResumeReport`, `EmployeesExtraReport`, `TimesheetPrintController`: cada um agrupa batidas por dia e as distribui por posição (1ª–4ª). Regra de horas extras duplicada 3×. |
 | Período 26→25 | `setPeriodFromMonth()` repetido em 4 componentes. |
 | Batida válida hoje | Não há conceito explícito. Relatórios exigem entrada **e** saída para calcular horas. |
@@ -239,7 +239,9 @@ Tratamento proposto (sem SoftDeletes):
 | 11 | `benefit_calculations` | Resultado por tipo | `benefit_period_employee_id` CASCADE; `carried_from_calculation_id` → self RESTRICT; `benefit_rate_id` → benefit_rates SET NULL | UNIQUE(`benefit_period_employee_id`,`benefit_type`); UNIQUE(`carried_from_calculation_id`); INDEX(`benefit_type`,`carried_out_days`) | Ordem de exclusão no recálculo (§5.3). |
 | 12 | `benefit_calculation_transport_items` | Snapshot VT | `benefit_calculation_id` CASCADE; `transport_route_id`, `transport_fare_id` SET NULL | — | — |
 
-Campos: exatamente os da Spec §17.1–§17.12.
+| 13 | `benefit_suggestion_runs` (F12/S1) | Trilha das execuções da geração de sugestões | `benefit_period_id` CASCADE; `user_id` SET NULL | INDEX(`benefit_period_id`,`created_at`) | Somente inserção (`UPDATED_AT = null`, model recusa update/delete). |
+
+Campos: exatamente os da Spec §17.1–§17.13.
 
 ### 5.3 Pontos de atenção de integridade
 
@@ -329,7 +331,7 @@ Justificativa: evita float em dois serviços (`TransportDailyAmount`, `BenefitPe
 | | |
 |---|---|
 | Entrada | `BenefitPeriod` |
-| Saída | `generate(period): array{created:int, skipped_existing:int, skipped_covered:int}`; `conflicts(period): list<array{type, employee_id, date, message}>`; `lastImportedPointDate(): ?CarbonImmutable` |
+| Saída | `generate(period): array{created, skipped_existing, skipped_covered, skipped_unobserved_days, last_imported, horizon, processed_from, processed_to}` (F12/S1); `importCoverage(period): array{last_imported, horizon, from, to}`; `generationBlocker(period, ?coverage): ?string`; `conflicts(period): list<array{type, employee_id, date, message}>`; `lastImportedPointDate(): ?CarbonImmutable` |
 | Responsabilidade | Ler `points` da janela M−1 para participantes; classificar dias; criar sugestões `Timesheet`/`Pending` idempotentes via `registerSuggestion`; calcular conflitos (não persistidos). Detalhe em §8. |
 | Não faz | Escrever em `points`; confirmar ajustes; usar regras de horas extras. |
 | Dependências | `BusinessCalendar`, `BenefitEligibility`, `BenefitAdjustmentRegistrar`, `Point` (somente leitura). |
@@ -412,19 +414,19 @@ Padrão: componentes class-based em `app/Livewire/Benefits/`, views em `resource
 ### 8.1 Pré-condições da geração
 
 1. Competência `Open` ou `Calculated`.
-2. `lastImportedPointDate()` = `max(date)` de `points` com `type = 'importado'` ≥ último dia da janela. (Pontos `manual` não contam: podem ter sido lançados antecipadamente.)
+2. **(F12/S1)** Horizonte de cobertura `H = lastImportedPointDate() − 1 dia` (Spec R33), com `lastImportedPointDate()` = `max(date)` de `points` com `type = 'importado'` (pontos `manual` não contam: podem ter sido lançados antecipadamente). Exige `H ≥` primeiro dia da janela. Até a F11 a regra exigia `lastImportedPointDate() ≥` último dia da janela.
 3. Participantes com PIS duplicado → bloqueio com mensagem.
 
-### 8.2 Operação do usuário quando a janela ainda não terminou (Spec §20.1)
+Execuções bloqueadas lançam `DomainException` e não são registradas.
 
-Sem mecanismo de contorno. Fluxo operacional:
+### 8.2 Operação do usuário quando a janela ainda não terminou (Spec §20.1)
 
 | Momento | Ação do administrador |
 |---|---|
 | ~20–28 de M−1 | Criar competência M; cadastrar/revisar vigências; lançar **eventos previstos** de M (férias, afastamentos programados); lançar manualmente eventos realizados já conhecidos, se desejar. |
-| Botão "Gerar sugestões" | Exibido desabilitado com o texto: "Batidas importadas até DD/MM/AAAA. A geração exige batidas até o último dia de <mês M−1>." |
-| 1º dia útil de M (após importar o AFD) | Gerar sugestões; revisar; confirmar/rejeitar; calcular; fechar. |
-| Se o pagamento precisar sair antes | O administrador lança manualmente (`Manual`) os eventos restantes da janela; ao gerar sugestões depois (competência ainda aberta), DD3/DD4 evitam duplicidade com os lançamentos manuais de mesmo sentido. Se a competência já estiver fechada, dias restantes entram como correção retroativa em M+1 (Spec §8.6). |
+| Antes do pagamento (ex.: 29/09, ponto importado até 29/09) | Gerar sugestões: a janela é analisada até 28/09. A tela mostra o intervalo processável e "aguardando importação: 29/09 a 30/09". Revisar, calcular e fechar. |
+| Após nova importação, competência ainda aberta | Gerar novamente: só os dias novos do horizonte produzem sugestões; os anteriores resultam em "já existentes"/"cobertos". |
+| Após nova importação, competência já fechada | Eventos dos dias restantes entram como correção retroativa `Manual` em M+1 (Spec §8.6). A sugestão automática da cauda é a etapa S3 (não implementada). |
 
 ### 8.3 Algoritmo
 
@@ -442,7 +444,9 @@ Sem mecanismo de contorno. Fluxo operacional:
               ->get(employee_id, reason, starts_on, ends_on)       (qualquer competência — DD4)
    coveredAbsence[employee_id] = set(dias); coveredWork[employee_id] = set(dias)
 7. existingKeys = dedupe_keys da competência                       (DD1, inclui rejeitadas)
-8. for day in BusinessCalendar::days(window):
+8. (F12/S1) to = min(window.end, H); importedDates = datas com batida type='importado' (mesma consulta distinct do passo 5, com `type`)
+   for day in BusinessCalendar::days(window) while day ≤ to:
+     if day é BusinessDay e day ∉ importedDates → skipped_unobserved_days++; próximo dia (R34)
      for employee in participants:
        punched = day ∈ punchedDays[e]
        match type(day):
@@ -452,7 +456,8 @@ Sem mecanismo de contorno. Fluxo operacional:
          Sunday:      if punched && day ∉ coveredWork     → SundayWorked (+1)
        key = "timesheet:{period}:{employee}:{Y-m-d}:{reason}"
        if key ∈ existingKeys → skipped_existing; else registerSuggestion(...)
-9. se created > 0 e período Calculated → invalidate
+9. se created > 0 e período Calculated → invalidate (pelo registrar)
+10. (F12/S1) grava BenefitSuggestionRun (horizonte, intervalo, contadores, usuário) na mesma transação
 ```
 
 Tudo dentro de `DB::transaction` com `BenefitPeriod::lockForUpdate()`. `UNIQUE(dedupe_key)` é a última barreira contra corrida.
@@ -465,6 +470,7 @@ Tudo dentro de `DB::transaction` com `BenefitPeriod::lockForUpdate()`. `UNIQUE(d
 | Trabalho em dia de ausência | Sábado/domingo/feriado punched **e** ∈ coveredAbsence. |
 | Participante com rescisão | `recision_date` não nulo e ≠ `''`. |
 | PIS sem funcionário | PIS com batida na janela que não mapeia para nenhum `Employee` (lista informativa). |
+| Dia útil sem batidas (F12/S1) | Dia útil da janela, até o horizonte, sem nenhuma batida `importado` de nenhum PIS (`day_without_punches`, com a data). |
 
 ### 8.5 Eventos previstos × suggester (Spec §9.3)
 
@@ -729,6 +735,434 @@ Checklist antes da primeira competência real:
 - **Objetivo:** navegação final, textos, Pint, suíte completa, rodada em MySQL.
 - **Conclusão:** `php artisan test --compact` verde em SQLite e MySQL.
 
+### F12 — Geração incremental de sugestões do ponto (Spec 3.1)
+
+Motivação: o pagamento de M ocorre no penúltimo ou último dia útil de M−1, antes de a janela terminar; a regra de "janela completamente importada" impedia a geração antes do pagamento.
+
+| Etapa | Escopo | Situação |
+|---|---|---|
+| **S1** | Horizonte de cobertura (R33), geração limitada ao horizonte, dias úteis sem batidas (R34), registro das execuções (`benefit_suggestion_runs`, R35), informações de cobertura na tela de ajustes. | **Implementada (20/10/2026).** |
+| **S2** | Conflitos para correções no ponto: sugestão de trabalho sem batida, ausência com batida adicionada depois, horizonte que recuou; proteção server-side da exclusão de batidas importadas. Nenhuma alteração automática de ajustes. | **Implementada (20/10/2026).** Detalhe em F12/S2 abaixo. |
+| **S3** | Compensação entre competências: eventos da janela de uma competência fechada posteriores à cobertura registrada (`processed_to`) sugeridos na competência seguinte (origem `Timesheet`, classe retroativa, exceção restrita). | **Implementada (20/10/2026).** Detalhe em F12/S3 abaixo. |
+
+- **S1 — arquivos:** M `app/Services/TimesheetAdjustmentSuggester.php`, `app/Models/BenefitPeriod.php` (`suggestionRuns()`), `app/Livewire/Benefits/BenefitPeriodAdjustments.php` + view; C `app/Models/BenefitSuggestionRun.php`, factory e migration `create_benefit_suggestion_runs_table`; M `tests/Feature/Benefits/TimesheetAdjustmentSuggesterTest.php`, `BenefitSchemaTest.php`. Não alterados: `BenefitAdjustmentRegistrar`, `BenefitPeriodWorkflow`, `BenefitPeriodCalculator`, importação AFD, Golden Dataset.
+- **S1 — testes:** horizonte (última data − 1, batida manual, sem importação, horizonte antes da janela, dia mais recente), geração parcial seguida de nova importação, reexecução sem novidades, rejeitadas e confirmadas preservadas, `UNIQUE(dedupe_key)`, dias sem batidas (sem ausência, conflito com a data, crédito de fim de semana mantido, dias além do horizonte não sinalizados), registro da execução (campos, execução sem criação, execução bloqueada não registrada, imutabilidade), tela.
+- **Limitação conhecida (Spec §13.5):** o horizonte supõe um único AFD acumulado e cronológico; não há registro de cobertura por importação.
+
+#### F12/S2 — Conflitos após correções no ponto (**implementado em 20/10/2026**)
+
+Status: implementado, com as decisões S2-P1 a S2-P8 aprovadas (P1 calculados; P2 C2–C5 só `Timesheet`; P3 C5 incluído com exigência de evidência; P4 exclusão restrita a funcionário/data da tela; P5 sem guarda no model `Point`; P6 rejeitadas não sinalizadas; P7 horizonte R33 inalterado; P8 conflitos não bloqueiam). Spec atualizada para 3.2 (§13.4, §13.5).
+
+Diferenças em relação ao plano abaixo, decididas na implementação:
+- **Evidência para C5** (exigida na aprovação de S2-P3; revisada na verificação final da S2): a ausência só é sinalizada quando fica demonstrado que **todas** as sugestões `Timesheet` da competência (em qualquer status) foram criadas por execuções registradas — quantidade igual à soma de `benefit_suggestion_runs.created`. O contador não identifica qual ajuste cada execução criou; por isso qualquer diferença (sugestão anterior ao registro de execuções, chamada direta ao registrar, exclusão fora do sistema) suprime C5 para toda a competência, em vez de presumir a origem. A regra inicial também aceitava ajustes com `created_at` posterior à primeira execução; foi removida porque atribuiria a uma execução uma sugestão criada por outro caminho depois dela. C5 também exige que a sugestão mantenha a data e o motivo da `dedupe_key`. A cobertura usa exclusivamente `processed_to`.
+- **`#[Locked]`** em `EmployeePointsEdit::$employee` e `$date`: sem isso o cliente poderia alterar o contexto da tela antes de chamar `removePoint`.
+- C1 passa a considerar também funcionários que deixaram de ser participantes, mas têm sugestões do ponto na competência.
+
+##### S2-1. Diagnóstico da arquitetura atual
+
+| Mecanismo | Local | Comportamento atual relevante para a S2 |
+|---|---|---|
+| Conflitos | `TimesheetAdjustmentSuggester::conflicts()` | Calculados sob demanda a cada render da tela de ajustes, **não persistidos** (Spec §13.4). Estrutura `array{type, employee_id, date, message}`. Tipos: `employee_rescinded`, `absence_with_punch`, `work_on_absence`, `day_without_punches` (S1), `unknown_pis`, `duplicated_pis`. Também roda para competência fechada (tela somente leitura). |
+| Base dos conflitos | `analyze()` | Uma consulta `distinct` em `points` (pis, date, type) na janela; mapa de batidas só para **participantes** (elegíveis em 01/M); `coverage()` lê ajustes não rejeitados de qualquer competência que tocam a janela, mas guarda apenas `true` por funcionário/dia (sem id, status, origem ou competência). |
+| Ausência com batida | `conflicts()` | Já detecta dia útil coberto por ausência não rejeitada (qualquer origem/competência) com batida de qualquer tipo (R6). **Cobre o fato da S2.2**, mas não identifica o ajuste, o status, a cobertura nem a ação. |
+| Trabalho sem batida | — | Não existe. |
+| Horizonte | `importCoverage()` | `H = max(date importado) − 1`; `to = min(fim da janela, H)` ou `null`. |
+| Cobertura anterior | `benefit_suggestion_runs` | Uma linha por execução bem-sucedida com `horizon_on`, `processed_to`, `created_at`. Execuções anteriores à S1 não existem (Spec §17.13). |
+| Geração | `generate()` | Só cria; nunca altera ajustes. Dia com batida → nada; dia sem batida → só cria se não houver chave (DD1) nem cobertura (DD4). Após uma correção do ponto, a geração **não** recria nem altera a sugestão afetada. Sem efeito colateral incompatível com a S2.4. |
+| Revisão | `BenefitAdjustmentRegistrar` | `update` (só Pending; preserva origem `Timesheet` mesmo ao trocar motivo/data), `confirm`, `reject` (Pending/Confirmed), `reconsider`, `replace` (só Confirmed). Toda ação manual em competência `Calculated` invalida a prévia — comportamento existente, disparado pelo usuário, não pela S2. `confirm` não verifica batidas. |
+| Competência fechada | `lockEditablePeriod` | Recusa qualquer alteração; correção = ajuste `Manual` retroativo em M+1 (Spec §8.6). |
+
+Conclusão: nenhum fluxo existente altera ajustes em resposta a uma correção do ponto. A S2 pode ser uma camada puramente de leitura dentro de `conflicts()`.
+
+##### S2-2. Decisão: conflitos calculados (não persistidos)
+
+| Critério | Calculado (proposto) | Persistido |
+|---|---|---|
+| Coerência com a Spec | Igual aos conflitos atuais (§13.4 "não persistidos"). | Exigiria nova regra de negócio e tabela. |
+| Evidência muda a todo momento (importação, batida manual, exclusão) | Resultado sempre reflete o estado atual. | Precisa de invalidação/reconciliação a cada mudança de `points`, que o módulo não observa (R31: só lê `points`). |
+| Idempotência | Trivial: mesma entrada → mesma saída; nenhuma gravação. | Precisa de chave de identidade, deduplicação e ciclo de vida (aberto/resolvido). |
+| Necessidade de "ciente"/resolução manual | Não exigida pelo pedido. | Só se justificaria com esse requisito. |
+
+**Proposta:** calculados. Persistência fica fora do escopo até existir requisito de registrar ciência/resolução.
+
+##### S2-3. Estrutura do conflito
+
+Manter as quatro chaves atuais e acrescentar três, presentes em **todos** os conflitos (nulas quando não se aplicam), para não haver dois formatos:
+
+```
+array{
+  type: string, employee_id: ?int, date: ?string, message: string,
+  adjustment_id: ?int,      // ajuste afetado
+  coverage: ?string,        // estado de cobertura do ponto na data (texto pronto)
+  action: ?string           // ação recomendada para revisão manual (texto pronto)
+}
+```
+
+A mensagem cita funcionário, data, motivo, número, status e competência do ajuste (mesmo formato de `BenefitAdjustmentRegistrar::describe`, reproduzido no suggester para não expor método privado do registrar).
+
+**Ação recomendada** (somente texto; nenhum botão novo de correção automática):
+
+| Situação do ajuste | Texto |
+|---|---|
+| `Pending`, competência editável | "Revise o ajuste #N: rejeite com nota ou altere o motivo." |
+| `Confirmed`, competência editável | "Revise o ajuste #N: rejeite ou substitua." |
+| Competência fechada | "Competência MM/AAAA fechada: se a correção proceder, lance um ajuste Manual retroativo na competência seguinte (Spec §8.6). Não reabra apenas por isso." |
+| `Rejected` | Não gera conflito (ajuste já sem efeito). |
+
+**Estado de cobertura** (texto): "Ponto coberto até DD/MM (dia com batidas importadas)", "Ponto coberto até DD/MM, mas nenhuma batida importada nesta data", "Data após o ponto coberto (DD/MM)", "Sem ponto importado".
+
+##### S2-4. Tipos de conflito e critérios exatos
+
+Universo analisado: ajustes **não rejeitados** cuja data toca a janela. Notação: `to` = `importCoverage()['to']` (pode ser nulo); `punched(e,d)` = batida de qualquer tipo do funcionário na data (R6); `observed(d)` = alguma batida `importado` de qualquer PIS na data (mesma definição da S1/R34). Para ajustes de vários dias, a avaliação é por dia.
+
+Regras mutuamente exclusivas, avaliadas nesta ordem para cada ajuste/dia:
+
+| # | Tipo | Critério | Ajustes considerados | Origem do requisito |
+|---|---|---|---|---|
+| C1 | `absence_with_punch` (**existente, enriquecido**) | Dia útil coberto por ausência e `punched(e,d)`. Independe do horizonte: batida é evidência positiva. | Ausências de qualquer origem e de qualquer competência (comportamento atual preservado), agora com `adjustment_id`, status e ação. | S2.2 |
+| C2 | `work_without_punch` (**novo**) | Ajuste de trabalho `Timesheet`, `d ≤ to`, `!punched(e,d)`. Cobertura: se `observed(d)` → "a evidência que gerou a sugestão não existe mais"; se `!observed(d)` → "nenhuma batida importada nesta data: evidência removida ou importação incompleta; não é prova de que não houve trabalho". | Só da competência exibida (sugestões `Timesheet` só existem na janela da própria competência). | S2.1 |
+| C3 | `suggestion_beyond_coverage` (**novo**) | Ajuste `Timesheet` com `to` nulo ou `d > to`, e **existe** execução da competência com `processed_to ≥ d`. Excluídos: trabalho com `punched(e,d)` (evidência positiva continua válida). | Só da competência exibida. | S2.3 |
+| C4 | `suggestion_coverage_unknown` (**novo**) | Igual a C3, mas **não existe** execução da competência com `processed_to ≥ d` (competência anterior à S1 ou sugestão criada antes da primeira execução registrada). A mensagem declara a limitação; nenhuma cobertura histórica é inferida. | Só da competência exibida. | S2.3 (histórico insuficiente) |
+| C5 | `absence_without_imported_punches` (**novo, proposto — ver decisão S2-P3**) | Ausência `Timesheet`, dia útil, `d ≤ to`, `!observed(d)`, `!punched(e,d)`. A sugestão foi criada quando o dia tinha batidas importadas (a S1 não cria ausência em dia sem batidas), e agora o dia não tem nenhuma: a base da inferência sumiu. | Só da competência exibida. | S2.1/S2.3 por analogia |
+
+Cobertura anterior (C3) = a execução da competência com o maior `processed_to` (desempate pelo maior id). A mensagem informa `processed_to` e `horizon_on` dessa execução e a data/hora em que rodou, além do `to` atual. **Não** se usa `created_at` como cobertura.
+
+Fora dos critérios (limitações registradas):
+- Sugestão `Timesheet` reclassificada na revisão (`update` preserva a origem) é avaliada pelo motivo e data **atuais**; se a `dedupe_key` (que guarda data/motivo originais) divergir, a mensagem acrescenta "ajuste alterado na revisão".
+- Ajustes `Manual`, `Hr` e `Import` de trabalho sem batida não geram C2: não dependem do ponto.
+- Sugestão **rejeitada** cuja evidência voltou a existir não é sinalizada (DD1 impede a recriação; o caminho é Reconsiderar). Candidato a etapa futura.
+- Funcionário com sugestão `Timesheet` na competência que deixou de ser participante: o mapa de batidas passa a incluí-lo (ver S2-6), para não perder C2–C5.
+
+##### S2-5. Proteção server-side da exclusão de batidas importadas
+
+Investigação:
+
+| Pergunta | Resposta (código e dados) |
+|---|---|
+| 1. Como distinguir importada × manual | `points.type`: `'importado'` gravado apenas por `EmployeeIndex::importPoints` (insert em lote); `'manual'` gravado apenas por `EmployeePointsEdit::saveNewPoint`. Coluna `VARCHAR NULL` sem constante/enum. Nenhum caminho altera `type` depois. No banco de desenvolvimento só existem esses dois valores (nenhum nulo). A distinção é confiável para esta proteção. |
+| 2. Proteção atual | **Somente na interface**: a view esconde o botão quando `type === 'importado'`. `removePoint($pointId)` faz `Point::find($pointId)->delete()` para **qualquer** id: qualquer tipo, qualquer funcionário, qualquer data — basta chamar o método Livewire com outro id. |
+| 3. Outros caminhos | Nenhum outro `delete`/`update` de `points` em `app/`. Excluir funcionário não remove batidas (relação por PIS, sem FK). Não há comando Artisan nem serviço de ponto. |
+| 4. Autorização | Rota `points-edit` dentro de `auth`. Não há policies/gates (R21: usuário único, sem roles). A proteção é regra de domínio, não autorização. |
+
+Proposta mínima (só `EmployeePointsEdit::removePoint`; sem mudar importação, parser, model `Point` ou outras telas):
+1. Buscar a batida **restrita ao contexto da tela**: `Point::where('pis', $this->employee->pis)->whereDate('date', $this->date)->find($pointId)`. Fora do contexto → notificação de erro, nada excluído.
+2. Se `type === 'importado'` → notificação de erro "Batidas importadas do relógio não podem ser excluídas.", nada excluído.
+3. Batida manual do próprio funcionário/data → exclusão como hoje (regra atual preservada).
+
+Alternativa não proposta: guarda `deleting` no model `Point` (protege qualquer caminho Eloquent, mas não `Point::query()->delete()` e altera um model que o plano declara intocado). Fica como decisão S2-P5.
+
+Observação: `EmployeePointsEdit.php` constava em "Arquivos explicitamente não alterados" (§13); a S2 altera `removePoint` e trava (`#[Locked]`) `$employee` e `$date`, com aprovação. A lista de §13 foi corrigida.
+
+##### S2-6. Alterações previstas por arquivo
+
+| Arquivo | Classe/método | Alteração |
+|---|---|---|
+| `app/Services/TimesheetAdjustmentSuggester.php` | `coverage()` (privado) | Guardar, por funcionário/dia, os ajustes que cobrem (id, motivo, status, origem, competência, dedupe_key) em vez de `true`. `generate()` continua usando `isset()` (comportamento idêntico). Mesma consulta única. |
+| | `analyze()` | Incluir no mapa de batidas os funcionários com ajustes `Timesheet` não rejeitados da competência (participantes ∪ esses). Nova consulta fixa desses ajustes com `employee:id,name,pis`. A consulta `distinct` de `points` continua única. |
+| | `conflicts()` | Enriquecer C1; acrescentar C2–C5; incluir as chaves `adjustment_id`, `coverage`, `action` em todos os conflitos. Uma consulta extra fixa: execução de maior `processed_to` da competência (não usar `created_at`). Sem gravações. |
+| | novos privados | `coverageState(date, to, observed)`, `recommendedAction(adjustment, period)`, `describeAdjustment(adjustment)`. |
+| `app/Livewire/Benefits/BenefitPeriodAdjustments.php` | `render()` | Sem nova lógica; continua repassando `conflicts`. |
+| `resources/views/livewire/benefits/benefit-period-adjustments.blade.php` | painel de conflitos | Rótulos dos novos tipos; exibir cobertura e ação recomendada; link para a linha do ajuste (`#adjustment-{id}`), se a linha já tiver âncora — senão acrescentar o atributo `id` à linha existente. |
+| `app/Livewire/EmployeePointsEdit.php` | `removePoint()` | Proteção S2-5. |
+| `tests/Feature/Benefits/TimesheetAdjustmentSuggesterTest.php` | — | Novos testes (S2-7); atualizar a asserção exata de `absence_with_punch` para o novo formato (sem remover cobertura). |
+| `tests/Feature/EmployeePointsEditTest.php` (novo) | — | Testes da exclusão. |
+| `docs/modulo-beneficios-vt-vr-vd.md` | §13.4, §13.5, histórico | Somente após aprovação/implementação. |
+| `docs/plano-implementacao-beneficios.md` | F12 | Status da S2. |
+
+Não alterados: `BenefitAdjustmentRegistrar`, `BenefitPeriodWorkflow`, `BenefitPeriodCalculator`, `BenefitCarryForwardReport`, `EmployeeIndex::importPoints`, `Point`, migrations existentes, `benefit_suggestion_runs` (só leitura), Golden Dataset. Nenhuma migration nova.
+
+##### S2-7. Plano de testes (Pest)
+
+Competência 10/2026, janela 01–30/09, ponto "completo" via colega não participante (fixture da S1).
+
+| # | Cenário | Resultado esperado |
+|---|---|---|
+| T1 | Sábado 12/09 com batida → gerar → excluir a batida (dia ainda com batidas importadas de outros) | `work_without_punch` com `adjustment_id`, data, funcionário, cobertura "coberto… com batidas importadas", ação por status; ajuste inalterado. |
+| T2 | Igual a T1, mas o dia fica sem nenhuma batida importada | `work_without_punch` com cobertura "nenhuma batida importada nesta data… não é prova…". |
+| T3 | Ausência sugerida em 15/09 → batida **manual** adicionada em 15/09 | `absence_with_punch` com `adjustment_id` e ação; ajuste inalterado. Idem com batida importada. |
+| T4 | Gerar com ponto até 01/10 (to = 30/09) → excluir batidas importadas de 29–30/09 e 01/10 (to = 28/09) | `suggestion_beyond_coverage` para sugestões de 29–30/09 com cobertura anterior 30/09 (execução) e atual 28/09; sugestões ≤ 28/09 sem esse conflito. |
+| T5 | Trabalho com batida em data além do novo horizonte | Nenhum C3 (evidência positiva). |
+| T6 | Sugestão `Timesheet` criada sem execução registrada (via `registerSuggestion` direto, simulando competência anterior à S1) e fora do horizonte atual | `suggestion_coverage_unknown` declarando falta de histórico; nenhuma cobertura inventada. |
+| T7 | `Pending`, `Confirmed`, `Rejected` envolvidos em T1–T6 | `getAttributes()` de todos os ajustes e impactos idênticos antes/depois de `conflicts()` e de nova `generate()`; status da competência inalterado (inclusive `Calculated`). |
+| T8 | Rejeitado em situação de conflito | Nenhum conflito para ele. |
+| T9 | Competência fechada com conflito | Ação recomendada cita ajuste Manual retroativo na competência seguinte; nada é alterado; tela somente leitura mostra o conflito. |
+| T10 | Idempotência | `conflicts()` duas vezes → arrays idênticos; nenhuma instrução `insert/update/delete` (listener `DB::listen`), nenhum ajuste/execução criado; `generate()` após correções não cria duplicatas. |
+| T11 | Consultas | Leituras de `conflicts()` com número fixo, independente de funcionários/dias; `points` lido por uma única consulta `distinct`. |
+| T12 | C5 (se aprovado) | Ausência sugerida, depois todas as batidas importadas do dia removidas → `absence_without_imported_punches`. |
+| T13 | Funcionário que deixou de ser participante com sugestão de trabalho sem batida | `work_without_punch` emitido. |
+| T14 | Tela | Rótulos, cobertura, ação e link para o ajuste visíveis; nenhuma ação automática oferecida. |
+| P1 | `removePoint` de batida manual do próprio funcionário/data | Excluída (regra atual). |
+| P2 | `Livewire::test(...)->call('removePoint', $importedId)` | Bloqueada no servidor, notificação de erro, registro intacto. |
+| P3 | `removePoint` com id de batida de outro funcionário ou outra data | Bloqueada, registro intacto. |
+| P4 | Botão de exclusão | Visível só para manuais (regressão da view). |
+| P5 | Adicionar batida manual | Continua funcionando. |
+| R1 | Regressão | Suíte completa SQLite + MySQL: importação (`EmployeeIndexTest`), sugestões, registrar, workflow (fechamento/reabertura), calculadora, carry-forward, `BenefitCatalogSeederTest`. |
+| R2 | Golden Dataset | `GoldenDatasetSeptember2026Test` sem alteração: VT 14.935,84 · VR+VD 30.065,00 · Total 45.000,84. |
+
+##### S2-8. Critérios de aceite
+
+1. T1–T14 e P1–P5 verdes; suíte completa verde em SQLite e MySQL; Pint limpo.
+2. Nenhuma gravação em `benefit_adjustments`, `benefit_adjustment_impacts`, `benefit_periods`, `benefit_period_status_changes`, `benefit_suggestion_runs` ou `points` causada por `conflicts()`.
+3. Conflitos mutuamente exclusivos por ajuste/dia (C1–C5) e estáveis entre execuções.
+4. Toda cobertura anterior citada vem de `benefit_suggestion_runs.processed_to`; sem histórico → C4 explícito.
+5. Exclusão de batida importada impossível por chamada direta; exclusão de manual preservada.
+6. Golden Dataset, registrar, workflow, calculadora, carry-forward e importação AFD sem diff.
+7. Spec §13.4/§13.5 atualizadas com os tipos implementados; S3 continua documentada como não implementada.
+
+##### S2-9. Riscos, limitações e decisões pendentes
+
+| # | Item | Proposta |
+|---|---|---|
+| S2-P1 | Conflitos calculados, não persistidos. | Aprovar. |
+| S2-P2 | C2/C3/C4/C5 restritos a ajustes de origem `Timesheet`; C1 continua valendo para ausências de qualquer origem (comportamento atual). | Aprovar. |
+| S2-P3 | Incluir C5 (ausência sugerida em dia útil que perdeu todas as batidas importadas). Não pedido explicitamente; fecha o caso simétrico ao S2.1 para ausências. | Recomendo incluir. |
+| S2-P4 | Proteção da exclusão restrita a funcionário/data da tela (além do bloqueio de importadas). | Recomendo incluir: fecha a exclusão de batida manual de outro funcionário por id arbitrário. |
+| S2-P5 | Guarda adicional no model `Point` (`deleting`). | Não recomendo agora (toca model declarado intocado; não cobre exclusão em massa). |
+| S2-P6 | Rejeitada cuja evidência voltou (Reconsiderar) não é sinalizada. | Etapa futura, se desejado. |
+| S2-P7 | Dados de desenvolvimento têm 156 batidas `importado` em 0005-11-30 (registros do AFD lidos como batida pelo parser). Datas passadas são inofensivas ao horizonte; uma data **futura** espúria inflaria H e poderia gerar ausências indevidas. | Decidir se o horizonte deve ser limitado a "ontem" (`min(H, hoje − 1)`) — alteração pequena na regra R33 da S1, fora do escopo da S2 sem aprovação. Parser AFD fora do escopo. |
+| S2-P8 | Conflitos não bloqueiam confirmação nem fechamento (regras atuais intocadas). | Manter; reavaliar se o RH pedir bloqueio. |
+| Risco | Custo de render: `conflicts()` roda a cada render da tela. | Consultas fixas (T11); sem consulta por funcionário/dia. |
+| Risco | Mudança do formato do conflito quebra quem compara o array inteiro. | Só testes e a view consomem; atualizar juntos. |
+| Ambiente | A migration `benefit_suggestion_runs` (S1) ainda não foi aplicada ao banco de desenvolvimento `laravel`. | Rodar `php artisan migrate` no ambiente de desenvolvimento antes de usar a S1/S2 na tela. |
+
+##### S2-10. Sequência e dependências
+
+| Ordem | Tarefa | Depende de | Aceite parcial |
+|---|---|---|---|
+| 1 | Proteção `removePoint` + `EmployeePointsEditTest` (P1–P5) | Aprovação S2-P4/S2-P5 | P1–P5 verdes. Independente das demais. |
+| 2 | Formato do conflito (3 chaves) + `coverage()` com ids + mapa de batidas ampliado | — | Testes atuais verdes (asserção de formato atualizada). |
+| 3 | C1 enriquecido (S2.2) | 2 | T3, T8. |
+| 4 | C2 (S2.1) | 2 | T1, T2, T13. |
+| 5 | C3/C4 (S2.3) | 2 | T4, T5, T6. |
+| 6 | C5 | 2, aprovação S2-P3 | T12. |
+| 7 | Tela | 3–6 | T14. |
+| 8 | Preservação, idempotência, consultas | 3–6 | T7, T9, T10, T11. |
+| 9 | Docs (Spec §13.4/§13.5, histórico 3.2; plano) | 1–8 | Spec descreve só o implementado. |
+| 10 | Regressão completa SQLite + MySQL, Pint, diff final | 1–9 | R1, R2, critérios S2-8. |
+
+
+#### F12/S3 — Compensação entre competências (**implementado em 20/10/2026**)
+
+Status: implementado com S3-P1 a S3-P9 aprovados. Spec 3.3 (R36–R39, §3.2, §8.4, §9.2, §13.4, §13.5, §17.13).
+
+Diferenças em relação ao plano abaixo, decididas na implementação:
+- **Horizonte do destino:** a geração de D mantém o bloqueio da S1 (horizonte antes do início da janela de D). Como a janela de D começa no dia seguinte ao fim da cauda, a cauda só é processada quando o ponto está completo até o início da janela de D; antes disso ela aparece como "aguardando importação". Na prática, a cauda é sempre processada inteira e `tail_pending_days` é informativo. Nenhuma coluna da S1 foi alterada.
+- **Contadores de cauda** em `benefit_suggestion_runs`: além de `compensation_created`, `compensation_skipped_existing`, `compensation_skipped_covered`, `compensation_skipped_unobserved_days`, `compensation_not_compensable` e `tail_pending_days`. `created` inclui as compensações (mantém a prova de origem do C5).
+- **`BenefitPeriod::coverageRun()`** em vez de `coveredUntil()`: devolve a execução (id e `processed_to`), usada na auditoria e no registrar.
+- **Dias úteis da cauda sem batidas importadas** geram `day_without_punches` na página de D (mesma regra R34).
+- **Registrar** passou a depender de `BenefitEligibility` para validar a participação sob bloqueio.
+- Execuções de D com origem fechada registram `tail_origin_period_id` também quando a origem não tem histórico (`tail_origin_run_id` nulo) ou está totalmente coberta. Notação: **O** = competência de origem (fechada); **D** = competência de destino; janela(O) = mês O−1; `covered(O)` = maior `processed_to` das execuções de O; `H` = horizonte atual (R33, inalterado).
+
+Exemplo-guia: O = 10/2026 (janela 01–30/09) fechada em 29/09 com `covered(O)` = 28/09. Os dias 29–30/09 ("cauda" de O) nunca foram analisados. Com o ponto importado até 01/10 (H = 30/09), a geração de D = 11/2026 sugere os eventos de 29–30/09 como compensação.
+
+##### S3-1. Diagnóstico da arquitetura atual
+
+| Peça | Comportamento atual | Impacto na S3 |
+|---|---|---|
+| `BenefitPeriod::timingOf` | Datas antes da janela de D → `Retroactive`. Os dias da cauda de O (mês O−1 = D−2) são retroativos para D. | A compensação é sempre `Retroactive` em D. |
+| `BenefitAdjustmentRegistrar::allowedTimings` | `Timesheet` → só `Realized`; `Manual`/`Hr` → todos; `Import` → `Realized`/`Retroactive`. `Retroactive` exige observação. | Exceção necessária e restrita (S3-6). |
+| `registrar::prepare` | Chamado por `createAdjustment` e por `update` (com `checkReasonSource: false`, mas **com** checagem de timing). `confirm`/`reject`/`reconsider` não chamam `prepare`; `replace` cria com origem `Manual`. | `update` de uma compensação falharia sem a exceção; `replace` já gera ajuste `Manual` (sem exceção). |
+| `registrar::registerSuggestion` | Deduplica pela `dedupe_key` em **qualquer** competência (`where dedupe_key` global) e trata a violação de `UNIQUE`. | Reutilizável para identidade global da compensação. |
+| `registrar::ensureNoDuplicate` (DD2/DD3) | Por competência (D): bloqueia segunda ausência/trabalho não rejeitado do mesmo funcionário e dia **em D**. | Compensação × ajuste `Manual` retroativo do mesmo dia em D é bloqueada (correto); a geração precisa pular antes (DD4) para não abortar. |
+| `TimesheetAdjustmentSuggester::generate` | Analisa só a janela de D até H; DD1 por `existingKeys` **de D**; DD4 em qualquer competência, mas apenas para dias da janela de D; trava só D. | Precisa ampliar análise, cobertura e chaves para a cauda; travar O antes de D. |
+| `conflicts()` (S2) | C2–C5 avaliam sugestões `Timesheet` de D recortadas na janela de D; C1 avalia ausências que tocam a janela da página. | Compensações (datas fora da janela de D) **não seriam avaliadas** na página de D; na página de O (fechada) apareceriam em C1 (comportamento existente). |
+| `allTimesheetCreatedByRuns` (C5) | Quantidade de sugestões `Timesheet` de D = Σ `created` das execuções de D. | Compensações criadas por execução de D devem entrar em `created`, senão C5 é suprimido em D. |
+| `BenefitPeriodCalculator::confirmedImpacts` | Soma impactos `Confirmed` da competência, sem olhar a classe temporal. | Compensação confirmada entra no cálculo de D sem mudança no cálculo. |
+| `BenefitPeriodWorkflow` | Calcular/fechar M exige M−1 fechada; reabrir M exige M+1 não fechada e invalida M+1 calculada; trava M e depois M+1. Competências são criadas em sequência. | D só é calculada com O fechada; uma reabertura de O invalida D calculada (existente). Ordem de travas O → D já usada por `reopen`. |
+| `benefit_suggestion_runs` | Guarda intervalo da janela própria (`processed_from/to`), horizonte e contadores. Sem informação de cauda. | Sem colunas novas não há como provar, depois, que uma execução de D processou a cauda (necessário para C3/C4 e auditoria). |
+
+##### S3-2. Decisões de negócio pendentes (para aprovação)
+
+| # | Decisão | Recomendação | Alternativa / impacto |
+|---|---|---|---|
+| S3-P1 | Permitir origem `Timesheet` com classe `Retroactive` **somente** para compensação de cauda validada pelo registrar (S3-6). | Aprovar. Altera Spec §3.2 e §8.4 (origens do retroativo). | Manter `Manual` retroativo (fluxo atual, Spec §8.6) e não implementar S3. |
+| S3-P2 | Destino da compensação = **somente** a competência imediatamente seguinte a O (D = O+1). | Aprovar para esta etapa. | Encaminhar para a primeira competência editável após O (D+1, D+2…): exige exceção retroativa mais ampla (meses anteriores a D−2), muda o vínculo origem→destino e o texto da auditoria; recomendo decidir depois, com base no uso real. |
+| S3-P3 | Funcionários compensáveis = participantes de O **e** de D (elegíveis em 01/O e em 01/D). | Aprovar. Quem participava de O e não participa de D aparece como pendência informativa (C7), sem ajuste. | Só participantes de D: compensaria quem não recebeu benefício em O (ex.: admitido depois). Os impactos por tipo seguem a regra atual (todos os tipos; o cálculo de D aplica só os tipos elegíveis em 01/D, R13). |
+| S3-P4 | Identidade da compensação **pela origem**: `dedupe_key = "timesheet-comp:{O.id}:{employee_id}:{Y-m-d}:{reason}"`. | Aprovar. Uma compensação rejeitada nunca é recriada, em nenhum destino. | Chave pelo destino: permitiria recriar em outro destino uma compensação rejeitada. |
+| S3-P5 | Migration aditiva em `benefit_suggestion_runs` (S3-5). | Aprovar. | Sem migration: auditoria só por observação e chave; C3/C4 das compensações sempre "cobertura desconhecida". |
+| S3-P6 | Origem fechada **sem** execução registrada: nenhuma cauda é calculada; a tela de D mostra aviso informativo com a ação manual. | Aprovar. Não bloqueia geração, cálculo nem fechamento. | Silenciar o aviso (risco de evento esquecido). |
+| S3-P7 | Edição (`update`) de uma compensação pendente: motivo e observação alteráveis; **data fixa** (a da chave). | Aprovar. | Permitir mudar a data dentro da cauda: exige revalidar a cauda na edição. |
+| S3-P8 | Destino D fechado sem compensar a cauda de O: nada é lançado; conflito informativo C6 na página de D e na de D+1 (se existir). | Aprovar. | Encaminhar automaticamente (depende de S3-P2 alternativa). |
+| S3-P9 | Reabertura de O depois de existirem compensações em D: nada automático. A geração de O reaberta pula os dias cobertos por compensações não rejeitadas (DD4); a geração de D não cria novas compensações enquanto O estiver aberta. | Aprovar (comportamento derivado das regras atuais). | — |
+
+##### S3-3. Algoritmo proposto (dentro de `generate(D)`)
+
+```
+1. Travar O (competência com competence = 01/D − 1 mês) e depois D (lockForUpdate, ordem crescente;
+   mesma ordem de BenefitPeriodWorkflow::reopen). D precisa estar Open/Calculated (regra atual).
+2. Cauda elegível somente se O existe, O.status = Closed e O tem execução registrada:
+     covered(O) = max(processed_to) das execuções de O      (nunca created_at)
+     tail_from  = covered(O) + 1 dia
+     tail_to    = min(windowEnd(O), H)
+   Sem O, O não fechada ou covered(O) ≥ windowEnd(O) → sem cauda.
+   O fechada sem execução → sem cauda + aviso (S3-P6).
+   tail_from > tail_to → cauda "aguardando importação" (nada criado; informado na tela).
+3. Participantes compensáveis = participantes(01/O) ∩ participantes(01/D)   (S3-P3)
+4. Ler batidas de [tail_from, windowEnd(D)] em UMA consulta distinct (amplia o intervalo da S1);
+   cobertura DD4 de [tail_from, windowEnd(D)] em qualquer competência.
+5. Para cada dia d da cauda × funcionário compensável, mesma classificação da S1:
+     dia útil sem batida e dia com batida importada (R34) → UnjustifiedAbsence
+     dia útil sem nenhuma batida importada → não sugere; conta skipped_unobserved; conflito day_without_punches
+     sábado/domingo/feriado com batida → SaturdayWorked/SundayWorked/HolidayWorked
+     coberto por ajuste não rejeitado do mesmo tipo (DD4, qualquer competência) → pula (skipped_covered)
+     chave "timesheet-comp:{O}:{e}:{d}:{reason}" já existe em qualquer status → pula (skipped_existing)
+     senão registrar->registerCompensation(D, O, e, reason, d, observação)
+6. Janela própria de D: exatamente como na S1.
+7. Gravar a execução de D com os campos de cauda (S3-5); `created` inclui as compensações
+   (mantém a prova de origem do C5), `compensation_created` é o subconjunto.
+```
+
+Virada do ano: O = 01/2027 (janela 12/2026); D = 02/2027 (janela 01/2027); cauda em 12/2026. As datas usam `competence` (`subMonthNoOverflow`, como `previousPeriod`), nunca ids.
+
+##### S3-4. Elegibilidade e cobertura — tabela de decisão
+
+| Situação de O | Situação de D | Resultado |
+|---|---|---|
+| Inexistente ou `Open`/`Calculated` | qualquer | Sem cauda: os dias continuam na geração da própria O. |
+| `Closed`, sem execução registrada | editável | Sem cauda; aviso S3-P6: "A competência O foi fechada sem execução registrada da geração do ponto. Não é possível verificar quais dias de dd/mm a dd/mm foram apurados. Se houver eventos não considerados, lance ajustes Manuais retroativos nesta competência." |
+| `Closed`, `covered(O)` = fim da janela de O | editável | Sem cauda. |
+| `Closed`, `covered(O)` < fim da janela | `Open` | Gera compensações `Pending`. |
+| idem | `Calculated` | Gera; a primeira criação descarta a prévia pelo registrar (`invalidateCalculation`: status → `Open`, histórico "Prévia descartada por alteração de ajustes."). Sem criação, a prévia é mantida. A tela já exibe o aviso de competência calculada e o resumo mostra as compensações criadas. |
+| idem | `Closed` | Nada é criado (bloqueio atual). Conflito C6 na página de D; se D+1 existir, C6 também na página de D+1 (somente informativo). |
+
+##### S3-5. Identificação e auditoria
+
+| Item exigido | Onde fica |
+|---|---|
+| Data original do evento | `starts_on` = `ends_on` = data do evento (classe `Retroactive` em D). |
+| Competência de origem | `dedupe_key` (`timesheet-comp:{O.id}:…`) e observação. |
+| Cobertura histórica que justificou | `benefit_suggestion_runs.tail_origin_covered_until` + `tail_origin_run_id` (execução de O com o maior `processed_to`) e observação. |
+| Competência de destino | `benefit_period_id` do ajuste. |
+| Motivo | `reason` (classificação S1) e observação. |
+| Vínculo para reconhecer em execuções posteriores | `dedupe_key` única por origem/funcionário/data/motivo (`UNIQUE` existente). |
+
+**Migration proposta (S3-P5)** — `add_tail_columns_to_benefit_suggestion_runs_table`, aditiva, todas as colunas anuláveis (execuções existentes ficam com `NULL`; nenhum histórico é inventado):
+
+| Coluna | Tipo | Observação |
+|---|---|---|
+| `tail_origin_period_id` | FK `benefit_periods` NULL, `nullOnDelete` | O |
+| `tail_origin_run_id` | FK `benefit_suggestion_runs` NULL, `nullOnDelete` | Execução de O que define `covered(O)` |
+| `tail_origin_covered_until` | DATE NULL | `covered(O)` no momento da execução |
+| `tail_from` / `tail_to` | DATE NULL | Intervalo da cauda efetivamente processado |
+| `compensation_created` | INT UNSIGNED DEFAULT 0 | Subconjunto de `created` |
+
+Por que o schema atual não basta: `processed_from/to` descrevem só a janela de D; sem `tail_from/tail_to` não há como demonstrar depois que uma execução de D processou um dia da cauda (C3/C4 das compensações ficariam sempre "desconhecida"), e a cobertura de O que justificou a compensação mudaria se O fosse reaberta e gerada de novo. Nenhuma coluna nova em `benefit_adjustments`.
+
+**Observação automática** (somente fatos registrados):
+
+> Compensação da competência 10/2026: evento de 30/09/2026 posterior ao ponto apurado naquela competência (cobertura registrada até 28/09/2026 pela execução #12 de 29/09/2026 14:05). Sugerido com o ponto considerado completo até 30/09/2026.
+
+Não afirma pagamento, valores nem que o evento "não foi pago": apenas que a data estava fora da cobertura registrada.
+
+##### S3-6. Registrar: exceção restrita, estados e deduplicação
+
+Novo método `BenefitAdjustmentRegistrar::registerCompensation(BenefitPeriod $destination, BenefitPeriod $origin, Employee, AdjustmentReason, CarbonInterface $date, string $notes)`, único caminho que usa a exceção. Em transação, com travas O → D:
+
+1. D editável (`lockEditablePeriod`); O `Closed`; O é exatamente a competência anterior a D (S3-P2).
+2. `covered(O)` recalculado das execuções de O; `covered(O) < date ≤ windowEnd(O)` — senão `DomainException`.
+3. Motivo de ausência ou trabalho padrão (origens permitidas da S1); data única.
+4. `dedupe_key` de compensação; existente em qualquer status → retorna o existente, `created: false` (mesmo padrão de `registerSuggestion`, inclusive `UniqueConstraintViolationException`).
+5. `createAdjustment(... AdjustmentSource::Timesheet ...)` com permissão interna de `Retroactive` **apenas** nesta chamada; observação obrigatória já atendida.
+
+`allowedTimings(Timesheet)` continua `[Realized]` para todos os outros caminhos. A exceção é reconhecida em `prepare()` por um parâmetro interno (não exposto em `register`), e em `update()` somente quando a `dedupe_key` do ajuste tem o prefixo `timesheet-comp:` e a data permanece a da chave (S3-P7). `register()` com origem `Timesheet` e data retroativa continua recusado.
+
+| Estado da compensação | Comportamento |
+|---|---|
+| `Pending` | Revisão normal: confirmar (DD2/DD3 em D), rejeitar com nota, editar motivo/observação (data fixa). Bloqueia o fechamento de D como qualquer pendente (regra atual). |
+| `Confirmed` | Entra no cálculo de D. Alteração só por Substituir (gera ajuste `Manual`) ou Rejeitar. |
+| `Rejected` | Nunca recriado (chave por origem); Reconsiderar volta para `Pending` (revalida DD2/DD3). |
+| Geração repetida | Chave existente → `skipped_existing`; dia coberto por ajuste não rejeitado do mesmo tipo em qualquer competência (DD4) → `skipped_covered`. |
+| `Manual` retroativo já lançado em D para o mesmo dia e tipo | DD4 pula a compensação (sem erro de DD2). |
+| Chaves existentes | `timesheet:{period}:…` inalteradas; o prefixo novo nunca colide com elas. |
+
+##### S3-7. Conflitos da S2 com compensações
+
+| Conflito | Página de D (destino) | Página de O (origem, fechada) |
+|---|---|---|
+| C1 `absence_with_punch` | **Mudança proposta:** C2–C5 e C1 passam a avaliar as compensações de D na data do evento (fora da janela de D), com o mapa de batidas ampliado à cauda. | Já aparece hoje para a compensação (ausência de qualquer competência que toca a janela). A ação vem da competência do ajuste (D), logo é a mesma recomendação nas duas páginas. |
+| C2 `work_without_punch`, C5 | Avaliados nas compensações como nas sugestões comuns (C5 depende da prova de origem de D, que inclui `created`). | Não se aplica (só sugestões de O). |
+| C3/C4 | "Execução que processou a data" = execução de D com `tail_from ≤ d ≤ tail_to` (C3) ou nenhuma (C4). | Inalterado. |
+| Novo C6 `uncompensated_tail` | Só com D **fechada**: dias da cauda de O, até H, com evento que seria sugerido e não coberto (DD4). Ação: "lance ajuste Manual retroativo na próxima competência editável". Também na página de D+1. | — |
+| Novo C7 `tail_not_compensable` | Funcionário com evento na cauda que participava de O e não participa de D (S3-P3). Informativo. | — |
+| Aviso S3-P6 | Linha no painel de sugestões (não é conflito de ajuste). | — |
+
+Garantia de não duplicação: na mesma página, cada ajuste/dia recebe no máximo um conflito (regra da S2); C6/C7 se referem a eventos **sem** ajuste e não coexistem com C1–C5 para o mesmo funcionário/dia. A semântica de C1–C5 para sugestões comuns não muda; a única mudança é estender a avaliação às compensações (destacada para aprovação junto com S3-P1).
+
+##### S3-8. Alterações previstas por arquivo
+
+| Arquivo | Alteração |
+|---|---|
+| `database/migrations/…_add_tail_columns_to_benefit_suggestion_runs_table.php` (novo) | S3-5. |
+| `app/Models/BenefitSuggestionRun.php` | Fillable/casts das colunas novas; relações `tailOriginPeriod()`, `tailOriginRun()`. |
+| `app/Models/BenefitPeriod.php` | `previousPeriod()` (por `competence`) e `coveredUntil(): ?CarbonImmutable` (maior `processed_to` das execuções). |
+| `app/Services/BenefitAdjustmentRegistrar.php` | `registerCompensation()`, `compensationKey()`; parâmetro interno em `prepare()`; reconhecimento em `update()`. Nenhuma outra regra muda. |
+| `app/Services/TimesheetAdjustmentSuggester.php` | `tailCoverage(D)` (público, para a tela); `generate()` com travas O → D, cauda, registro; `analyze()` com intervalo ampliado; `conflicts()` com compensações, C6, C7 e aviso S3-P6. |
+| `app/Livewire/Benefits/BenefitPeriodAdjustments.php` + view | Bloco "Compensação da competência anterior": origem, cobertura registrada, cauda processável/aguardando, aviso S3-P6; resumo com compensações; rótulos C6/C7; seção Retroativo já existente exibe as compensações (origem Ponto). |
+| `database/factories/BenefitSuggestionRunFactory.php` | Estado com cauda. |
+| Testes | `TimesheetAdjustmentSuggesterTest`, `BenefitAdjustmentRegistrarTest`, `BenefitSchemaTest`, novo `TimesheetCompensationTest`. |
+| Docs | Spec: R36+ (compensação), §3.2, §8.4, §9.2 (chave de compensação), §13.4, §17.13; plano. |
+
+Não alterados: `BenefitPeriodCalculator`, `BenefitPeriodWorkflow` (fechamento, reabertura, carry-forward), snapshots, `EmployeeIndex::importPoints`, `Point`, Golden Dataset, regra do horizonte (R33).
+
+##### S3-9. Testes planejados (Pest)
+
+| # | Cenário | Esperado |
+|---|---|---|
+| 1 | O fechada, `covered(O)` = 28/09, falta em 30/09 e sábado trabalhado 26/09 (antes da cobertura) e domingo 27/09 com batida | D cria compensação de 30/09 (`Timesheet`, `Pending`, `Retroactive`, observação no formato S3-5, chave `timesheet-comp:`); nada para 26–28/09. |
+| 2 | Evento em 15/09 (dentro de `covered(O)`) sem sugestão em O | Não compensado. |
+| 3 | O fechada sem execução | Nenhuma compensação; aviso S3-P6 com o intervalo da janela de O; geração de D segue normal. |
+| 4 | D `Open` | Compensação criada; execução de D com `tail_*` e `compensation_created`. |
+| 5 | D `Calculated` | Com criação: prévia descartada pelo registrar, histórico de status registrado; sem criação: prévia mantida. |
+| 6 | D `Closed` | Geração bloqueada (regra atual); C6 na página de D. |
+| 7 | O e D fechadas, D+1 aberta | Nada criado em D nem em D+1; C6 em D e em D+1. |
+| 8 | Gerar D três vezes, com importações intermediárias | Cada evento uma vez; `skipped_existing`; contadores corretos. |
+| 9 | Compensação pendente/confirmada/rejeitada | Confirmar entra no cálculo de D; rejeitada não é recriada (inclusive com nova importação); reconsiderar volta a pendente; `update` muda motivo e recusa mudança de data. |
+| 10 | Virada do ano (O = 01/2027, D = 02/2027, cauda em 12/2026) e meses com 28/29/31 dias | Intervalos corretos. |
+| 11 | Origem fechada | Snapshot de O (`benefit_calculations`, `benefit_period_employees`, status, `closed_at`) idêntico antes/depois. |
+| 12 | Chaves | `timesheet:{period}:…` existentes inalteradas; sem colisão; `UNIQUE` barra duplicata concorrente. |
+| 13 | Conflitos | Compensação com batida adicionada → um C1 na página de D (e o C1 existente na de O, mesma ação); C2/C3/C4/C5 para compensações; C6/C7 sem duplicar C1–C5. |
+| 14 | Exceção restrita | `register(..., Timesheet, data retroativa)` recusado; `registerCompensation` recusado para data ≤ `covered(O)`, data fora da janela de O, O aberta, O que não é a anterior a D, D fechada. |
+| 15 | Participantes (S3-P3) | Participante de O e não de D → C7, sem ajuste; participante só de D → nada. |
+| 16 | Reabertura de O com compensação em D | Geração de O pula o dia (DD4); D não cria novas compensações enquanto O aberta. |
+| 17 | Concorrência / travas | Travas O → D; geração de D e reabertura de O serializadas. |
+| R1 | Regressão | Suíte completa SQLite + MySQL. |
+| R2 | Golden Dataset | Sem diff; VT 14.935,84 · VR+VD 30.065,00 · Total 45.000,84. |
+
+##### S3-10. Critérios de aceite
+
+1. Testes 1–17, R1 e R2 verdes; Pint limpo; migration com rollback validado em SQLite e MySQL (`testing`).
+2. Nenhuma alteração em competência fechada (origem ou destino), em snapshots, cálculo, carry-forward, fechamento/reabertura ou horizonte.
+3. Cada evento da cauda gera no máximo uma compensação em todo o sistema; rejeitada nunca é recriada.
+4. Toda cobertura citada vem de `processed_to` / `tail_*`; sem execução → nenhuma cauda e aviso explícito.
+5. A exceção `Timesheet` + `Retroactive` só é alcançável por `registerCompensation` com cauda validada.
+6. Nenhum evento da cauda some em silêncio: é compensado, aguarda importação, aparece em C6/C7 ou no aviso S3-P6.
+
+##### S3-11. Riscos
+
+| Risco | Mitigação |
+|---|---|
+| Exceção retroativa usada fora da compensação | Método dedicado; validação dentro do registrar sob trava; teste 14. |
+| Deadlock entre geração de D e reabertura de O | Mesma ordem de travas (O → D) de `reopen`. |
+| Compensação para quem não recebeu benefício em O | Interseção de participantes (S3-P3). |
+| Impactos por tipo divergentes entre O e D | Mesma regra dos realizados (R13): o cálculo de D aplica os tipos elegíveis em 01/D. Documentar. |
+| Cauda nunca compensada por D fechada | C6 em D e D+1; decisão S3-P2 alternativa para o futuro. |
+| Cobertura de O muda após reabertura | `tail_origin_covered_until` e `tail_origin_run_id` congelam a justificativa na execução de D. |
+| Custo da tela | Consultas fixas; intervalo de `points` ampliado na mesma consulta distinct. |
+
+##### S3-12. Sequência de implementação
+
+| Ordem | Tarefa | Depende de |
+|---|---|---|
+| 1 | Aprovação de S3-P1 a S3-P9 | — |
+| 2 | Migration + model + factory + `BenefitSchemaTest` | 1 (S3-P5) |
+| 3 | `BenefitPeriod::previousPeriod()` / `coveredUntil()` | — |
+| 4 | Registrar: `registerCompensation`, chave, exceção em `prepare`/`update` + testes 9, 12, 14 | 1 |
+| 5 | Suggester: `tailCoverage`, geração com cauda, travas, registro da execução + testes 1–8, 10, 11, 15–17 | 2–4 |
+| 6 | Conflitos: compensações em C1–C5, C6, C7, aviso S3-P6 + teste 13 | 5 |
+| 7 | Tela | 5, 6 |
+| 8 | Docs (Spec 3.3; plano) | 1–7 |
+| 9 | Regressão completa SQLite + MySQL, Pint, rollback da migration, diff final | 1–8 |
+
 ---
 
 ## 13. Detailed File-Level Plan
@@ -840,7 +1274,9 @@ Legenda: **C** criar · **M** modificar · **R** apenas consultar/reutilizar. Ca
 | M | Ajustes finos nas views/rotas criadas |
 | R | Suíte completa |
 
-**Arquivos explicitamente não alterados:** `app/Models/Point.php`, `app/Models/Holiday.php`, `app/Models/ImportedLines.php`, `app/Livewire/EmployeeHorasExtras.php`, `EmployeePointsEdit.php`, `EmployeeResumeReport.php`, `EmployeesExtraReport.php`, `TimesheetPrint.php`, `app/Http/Controllers/TimesheetPrintController.php`, `app/Exports/*`, migrations existentes, `EmployeeCreate.php`, `EmployeeEdit.php`.
+**F12/S3 — arquivos:** C migration `add_tail_columns_to_benefit_suggestion_runs_table`, `tests/Feature/Benefits/TimesheetCompensationTest.php`; M `BenefitSuggestionRun` (+factory), `BenefitPeriod` (`previousPeriod`, `coverageRun`), `BenefitAdjustmentRegistrar` (`registerCompensation`, `compensationKey`, `isCompensation`, exceção restrita em `prepare`/`update`), `TimesheetAdjustmentSuggester` (`tailCoverage`, geração com cauda e travas O → D, conflitos C1–C7 com compensações), `BenefitPeriodAdjustments` + view, `TimesheetAdjustmentSuggesterTest`, `BenefitSchemaTest`.
+
+**Arquivos explicitamente não alterados:** `app/Models/Point.php`, `app/Models/Holiday.php`, `app/Models/ImportedLines.php`, `app/Livewire/EmployeeHorasExtras.php`, `EmployeeResumeReport.php`, `EmployeesExtraReport.php`, `TimesheetPrint.php`, `app/Http/Controllers/TimesheetPrintController.php`, `app/Exports/*`, migrations existentes, `EmployeeCreate.php`, `EmployeeEdit.php`. (`EmployeePointsEdit.php` saiu desta lista na F12/S2: proteção de `removePoint`.)
 
 ---
 
@@ -872,3 +1308,6 @@ Somente questões descobertas na análise que afetam a implementação. Nenhuma 
 10. **F9** — Fechamento, reabertura, imutabilidade, relatório e tela de pendências de saldo.
 11. **F10** — Golden G-ALL; cadastro de feriados; carga inicial (seeder opcional do catálogo + tela para funcionários); resolver OI-3/OI-4/OI-5.
 12. **F11** — Acabamento, Pint, suíte completa em SQLite e MySQL.
+13. **F12/S1** — Geração incremental de sugestões do ponto (implementada).
+14. **F12/S2** — Conflitos após correções no ponto e proteção de exclusão de batidas importadas (implementada).
+15. **F12/S3** — Compensação entre competências (implementada).

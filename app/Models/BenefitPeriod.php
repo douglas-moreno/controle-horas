@@ -68,6 +68,28 @@ class BenefitPeriod extends Model
     }
 
     /**
+     * Competência imediatamente anterior (mês M−1), localizada pela data, não pelo id.
+     */
+    public function previousPeriod(): ?self
+    {
+        return static::query()
+            ->where('competence', $this->referenceDate()->subMonthNoOverflow()->toDateString())
+            ->first();
+    }
+
+    /**
+     * Execução que define a cobertura registrada da competência: a de maior
+     * `processed_to` (desempate pela mais recente). Null quando não há execução.
+     */
+    public function coverageRun(): ?BenefitSuggestionRun
+    {
+        return $this->suggestionRuns()
+            ->orderByDesc('processed_to')
+            ->orderByDesc('id')
+            ->first();
+    }
+
+    /**
      * Data de referência (01/M) da competência fechada mais recente. Vigências de
      * valores e preços com início até essa data fazem parte de resultados fechados.
      */
@@ -113,6 +135,14 @@ class BenefitPeriod extends Model
     public function adjustments(): HasMany
     {
         return $this->hasMany(BenefitAdjustment::class);
+    }
+
+    /**
+     * @return HasMany<BenefitSuggestionRun, $this>
+     */
+    public function suggestionRuns(): HasMany
+    {
+        return $this->hasMany(BenefitSuggestionRun::class);
     }
 
     /**

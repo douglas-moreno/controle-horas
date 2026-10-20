@@ -9,6 +9,7 @@ use App\Models\BenefitPeriod;
 use App\Models\BenefitPeriodEmployee;
 use App\Models\BenefitPeriodStatusChange;
 use App\Models\BenefitRate;
+use App\Models\BenefitSuggestionRun;
 use App\Models\Employee;
 use App\Models\EmployeeBenefit;
 use App\Models\TransportFare;
@@ -38,6 +39,7 @@ describe('tables', function () {
         'benefit_period_employees' => ['benefit_period_employees', ['id', 'benefit_period_id', 'employee_id', 'employee_name', 'pis', 'position', 'created_at', 'updated_at']],
         'benefit_calculations' => ['benefit_calculations', ['id', 'benefit_period_employee_id', 'benefit_type', 'base_days', 'positive_days', 'negative_days', 'carried_in_days', 'carried_from_calculation_id', 'raw_days', 'final_days', 'carried_out_days', 'unit_amount', 'total_amount', 'benefit_rate_id', 'created_at', 'updated_at']],
         'benefit_calculation_transport_items' => ['benefit_calculation_transport_items', ['id', 'benefit_calculation_id', 'transport_route_id', 'transport_fare_id', 'fare_name', 'fare_amount', 'trips_per_day', 'daily_amount', 'created_at', 'updated_at']],
+        'benefit_suggestion_runs' => ['benefit_suggestion_runs', ['id', 'benefit_period_id', 'user_id', 'last_imported_on', 'horizon_on', 'processed_from', 'processed_to', 'created', 'skipped_existing', 'skipped_covered', 'skipped_unobserved_days', 'tail_origin_period_id', 'tail_origin_run_id', 'tail_origin_covered_until', 'tail_from', 'tail_to', 'tail_pending_days', 'compensation_created', 'compensation_skipped_existing', 'compensation_skipped_covered', 'compensation_skipped_unobserved_days', 'compensation_not_compensable', 'created_at']],
     ]);
 });
 
@@ -98,6 +100,14 @@ describe('cascade on delete', function () {
         $change->benefitPeriod->delete();
 
         $this->assertModelMissing($change);
+    });
+
+    test('deleting a period removes its suggestion runs', function () {
+        $run = BenefitSuggestionRun::factory()->create();
+
+        $run->benefitPeriod->delete();
+
+        $this->assertModelMissing($run);
     });
 
     test('deleting a period discards the whole snapshot', function () {

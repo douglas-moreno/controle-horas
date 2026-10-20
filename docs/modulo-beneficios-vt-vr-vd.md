@@ -4,9 +4,9 @@
 
 | | |
 |---|---|
-| Versão | 3.0 |
+| Versão | 3.3 |
 | Status | **Especificação definitiva** |
-| Data | 29/09/2026 |
+| Data | 29/09/2026 (3.0) · 20/10/2026 (3.1, 3.2, 3.3) |
 | Escopo | Vale Transporte (VT), Vale Refeição (VR), Vale Desjejum (VD) |
 | Stack | Laravel 13.21.1 · PHP 8.4.1 · Livewire 4.3.3 · Flux 2.15 Free · WireUI 2.6 · Pest 4 · MySQL (produção) · SQLite (testes/local) |
 | Próximo passo | "Analisar esta especificação contra o código atual do projeto e criar o plano de implementação." |
@@ -50,6 +50,9 @@
 | 1.0 | Especificação inicial com pendências P1–P12. |
 | 2.0 | P1–P12 resolvidas: janela de realizados = mês civil M−1; VR/VD vigentes em 01/M; admissão/rescisão não limitam o cálculo; saldo negativo com carry-forward; todos batem ponto; reuso de `Employee`; usuário único sem roles; planilha = Golden Dataset; VR/VD globais; saída = tela de apuração; `OtherAbsence` = −1. Deduplicação passou a ser por competência. Abertas D1–D5. |
 | **3.0** | **D1** → eventos previstos permitidos na própria competência (`Manual`/`Hr`), com deduplicação contra sugestões do ponto. **D2** → saldo negativo sem benefício elegível na competência seguinte não migra; permanece como pendência administrativa rastreável. **D3** → referência em 01/M também para elegibilidade, itinerário e tarifa de VT. **D4** → `TimesheetAdjustmentSuggester` faz parte do MVP. **D5** → `app/Enums` e `app/Services` aprovados. Corrigida a inconsistência de participação: `recision_date` deixa de ser filtro; participação = elegibilidade em 01/M. Modelo de carry-forward revisto. Alteração de ajuste confirmado definida pelo fluxo normal (rejeição + substituição). |
+| **3.1** | **Geração incremental de sugestões do ponto (etapa S1).** A geração deixa de exigir o ponto importado até o fim da janela: processa a janela até o **horizonte de cobertura** (último dia importado − 1), pode ser repetida após novas importações e registra cada execução (`benefit_suggestion_runs`). Dia útil sem nenhuma batida importada não gera ausência e é sinalizado como conflito. Regras R33–R35. Conflitos de importações corrigidas (S2) e cauda retroativa para a competência seguinte (S3) **não fazem parte desta versão**. |
+| **3.2** | **Conflitos após correções no ponto (etapa S2).** Novos conflitos calculados (não persistidos) comparam ajustes existentes com a evidência atual do ponto: trabalho sem batida, sugestão fora do ponto coberto (cobertura anterior conhecida ou desconhecida) e ausência em dia que perdeu as batidas importadas; `absence_with_punch` passa a identificar o ajuste. Todo conflito informa ajuste, cobertura e ação recomendada. Conflitos não alteram ajustes e não bloqueiam confirmação nem fechamento. Batidas importadas não podem ser excluídas pela tela de edição de pontos. Cauda retroativa (S3) **continua fora**. |
+| **3.3** | **Compensação entre competências (etapa S3).** Eventos da janela de uma competência fechada posteriores à sua cobertura registrada ("cauda") são sugeridos na competência imediatamente seguinte como compensação: origem `Timesheet`, classe retroativa, somente por um caminho dedicado e validado (R36–R39). Conflitos C1–C5 avaliam também as compensações; novos conflitos de cauda não compensada e não compensável. Competências fechadas nunca recebem lançamentos automáticos. |
 
 ---
 
@@ -89,6 +92,13 @@
 | R30 | Eventos **previstos** (administrativos, conhecidos antecipadamente) podem ter datas dentro da própria competência M e afetam diretamente M. Origem `Manual` (ou futuramente `Hr`). |
 | R31 | O `TimesheetAdjustmentSuggester` faz parte do MVP, é idempotente e apenas lê `points`. |
 | R32 | Lógica de domínio em `app/Enums` e `app/Services`, separada da camada Livewire. |
+| R33 | **Horizonte de cobertura** = maior data de `points` com `type = 'importado'` − 1 dia. Batidas manuais não movem o horizonte; o dia mais recente é excluído por poder estar incompleto. A geração analisa somente `[início da janela, min(fim da janela, horizonte)]`. É uma aproximação baseada na premissa de um único AFD acumulado e cronológico (ver 13.5), não uma prova de que cada dia foi importado. |
+| R34 | Dia útil dentro do horizonte **sem nenhuma batida importada** (de qualquer PIS) não gera sugestão de ausência para ninguém; é listado como conflito `Dia útil sem batidas`. Créditos de sábado/domingo/feriado continuam dependendo apenas de evidência positiva (batida). |
+| R36 | **Compensação da cauda.** Se a competência anterior O está `Closed` e sua cobertura registrada (maior `processed_to` das execuções de O) não alcança o fim da janela de O, os dias seguintes à cobertura até o fim da janela, limitados ao horizonte (R33), são analisados com as regras de 13.3 e R34 na geração da competência imediatamente seguinte D. Os eventos viram ajustes `Timesheet`/`Pending` em D, classe retroativa, com observação automática que cita a data, a origem e a execução que define a cobertura. Sem execução registrada em O, nenhuma cauda é presumida; a tela orienta o lançamento `Manual`. |
+| R37 | Compensação somente para funcionários participantes de O **e** de D. Quem participava de O e não participa de D é listado como pendência (conflito), sem ajuste. |
+| R38 | Destino da compensação: somente a competência imediatamente seguinte à origem, editável. Destino fechado não recebe lançamentos: o evento é listado como conflito na página do destino e na da competência seguinte; o caminho é ajuste `Manual` retroativo. Reabrir a origem não cria nem desfaz compensações. |
+| R39 | Identidade da compensação pela origem: `dedupe_key = "timesheet-comp:{origem}:{funcionário}:{data}:{motivo}"` (`UNIQUE`). Uma compensação existe no máximo uma vez em todo o sistema; rejeitada não é recriada. Na edição, motivo e observação podem mudar; a data, não. |
+| R35 | A geração é incremental e idempotente: pode ser executada várias vezes durante a janela; cada execução cria apenas os eventos novos (DD1/DD4) e é registrada em `benefit_suggestion_runs`, inclusive quando nada é criado. Ajustes existentes nunca são alterados pela geração. |
 
 ---
 
@@ -112,7 +122,7 @@ A classe é **derivada das datas do ajuste** em relação à competência a que 
 |---|---|---|---|
 | **Realizado** | Dentro da janela (mês M−1) | `Timesheet`, `Manual`, `Hr`, `Import` | Sábado 12/09 trabalhado; falta em 21/09 |
 | **Previsto** | Dentro da própria competência (mês M) | `Manual`, `Hr` | Férias 01/10 → 05/10 |
-| **Correção retroativa** | Anterior à janela | `Manual`, `Hr`, `Import` (observação obrigatória) | Falta de agosto descoberta em setembro |
+| **Correção retroativa** | Anterior à janela | `Manual`, `Hr`, `Import` (observação obrigatória); `Timesheet` **somente** como compensação da cauda da competência anterior fechada (R36–R39) | Falta de agosto descoberta em setembro; falta de 30/09 compensada em 11/2026 |
 
 - Datas posteriores ao último dia da competência: proibidas.
 - Um ajuste não pode misturar classes: o intervalo `[starts_on, ends_on]` fica inteiramente em uma delas. Um período que atravessa meses é lançado como eventos separados.
@@ -390,7 +400,7 @@ total = VT.total_amount + VR.total_amount + VD.total_amount   (tipo não elegív
 | Origem | Uso no MVP | Status inicial | Classes de evento permitidas |
 |---|---|---|---|
 | `Manual` | Lançamento pelo administrador. | `Confirmed` | Realizado, Previsto, Correção retroativa |
-| `Timesheet` | Sugestão do `TimesheetAdjustmentSuggester`. | `Pending` | Realizado |
+| `Timesheet` | Sugestão do `TimesheetAdjustmentSuggester`. | `Pending` | Realizado; Correção retroativa somente como compensação (R36–R39), criada por caminho dedicado |
 | `Hr` | Reservado ao futuro domínio de ausências. Sem uso no MVP. | `Confirmed` | Realizado, Previsto, Correção retroativa |
 | `Import` | Reservado a importação. Sem uso no MVP. | `Pending` | Realizado, Correção retroativa |
 
@@ -435,7 +445,7 @@ Deduplicação por **efeito dentro da competência** (R26). Não existe restriç
 
 | # | Regra | Mecanismo |
 |---|---|---|
-| DD1 | A mesma sugestão do ponto não é criada duas vezes na mesma competência. Sugestão rejeitada não é recriada. | `dedupe_key = "timesheet:{period_id}:{employee_id}:{date}:{reason}"`, `UNIQUE` |
+| DD1 | A mesma sugestão do ponto não é criada duas vezes na mesma competência. Sugestão rejeitada não é recriada. Compensações (3.3) usam chave própria pela origem, válida em todo o sistema. | `dedupe_key = "timesheet:{period_id}:{employee_id}:{date}:{reason}"`; compensação: `"timesheet-comp:{origin_period_id}:{employee_id}:{date}:{reason}"`; `UNIQUE` |
 | DD2 | Na mesma competência, para o mesmo funcionário e dia: no máximo um evento não rejeitado de **ausência**. | Validação no registro/confirmação; bloqueia. |
 | DD3 | Na mesma competência, para o mesmo funcionário e dia: no máximo um evento não rejeitado de **trabalho**. | Idem; bloqueia. |
 | DD4 | **Cobertura para sugestões:** o gerador não cria sugestão de ausência para um dia já coberto por ajuste de ausência não rejeitado do funcionário, **em qualquer competência** (inclui previstos da competência anterior). O mesmo vale para sugestões de trabalho em relação a ajustes de trabalho. | Consulta prévia na geração. |
@@ -485,7 +495,7 @@ Validações concorrentes usam bloqueio pessimista (`lockForUpdate`) sobre a com
 | Ação | Pré-condições |
 |---|---|
 | Criar competência | É o mês seguinte à última existente (ou a primeira). |
-| Gerar sugestões | Status `Open`/`Calculated`; batidas importadas até o último dia da janela (ver 20.1). |
+| Gerar sugestões | Status `Open`/`Calculated`; horizonte de cobertura (R33) igual ou posterior ao primeiro dia da janela. A janela não precisa estar completamente importada (ver 20.1). |
 | Calcular | Status `Open`/`Calculated`; M−1 `Closed` se existir; valor VR/VD vigente em 01/M para os tipos com participantes. |
 | Fechar | Todas as de "Calcular"; zero ajustes `Pending`; todo elegível ao VT com itinerário e preços vigentes em 01/M. |
 | Reabrir | Status `Closed`; M+1 não `Closed`; motivo informado. |
@@ -545,6 +555,7 @@ BenefitPeriodCalculator
 
 - O serviço apenas lê `points`. Nenhuma alteração no módulo de ponto nem no cálculo de horas.
 - Idempotente (DD1 + DD4): executar novamente não duplica sugestões nem recria rejeitadas.
+- Incremental (R33–R35): analisa a janela somente até o horizonte de cobertura. Após nova importação, uma nova execução analisa os dias que entraram no horizonte; os dias já analisados resultam em "já existentes" ou "cobertos". Cada execução é registrada em `benefit_suggestion_runs` com a última data importada, o horizonte, o intervalo processado e os contadores.
 - Analisa somente participantes da competência M (elegíveis em 01/M).
 
 ### 13.2 Batida válida
@@ -557,6 +568,8 @@ Registro em `points` cujo PIS corresponde ao funcionário (relação existente `
 |---|---|
 | Dia útil com ≥ 1 batida | Nada (R6). |
 | Dia útil sem batida, não coberto por ausência (DD4) | Sugestão `UnjustifiedAbsence`, −1, `Pending`. Reclassificável na revisão. |
+| Dia útil sem nenhuma batida importada de nenhum PIS (R34) | Nada para todos os participantes; conflito `Dia útil sem batidas`. |
+| Dia posterior ao horizonte de cobertura (R33) | Não analisado nesta execução; aparece como "aguardando importação". |
 | Dia útil sem batida, coberto por ausência não rejeitada (qualquer competência) | Nada. |
 | Sábado com ≥ 1 batida, não coberto por trabalho (DD4) | Sugestão `SaturdayWorked`, +1, `Pending`. |
 | Domingo com ≥ 1 batida, não coberto | Sugestão `SundayWorked`, +1, `Pending`. |
@@ -574,7 +587,39 @@ Os conflitos são **calculados** pelo serviço e exibidos na tela de ajustes. N�
 | Dia útil coberto por ausência, mas com batida | Férias previstas 01–05/10 e batidas em 02/10 | Revisar: se as férias não ocorreram e a competência de origem está fechada, lançar correção `Manual` (8.6). |
 | Sábado/domingo/feriado com batida em dia coberto por ausência | Batida no sábado durante férias | Sugestão +1 é gerada; conflito exibido. |
 | Participante com `recision_date` preenchida | — | Alerta informativo (4.2). |
-| Batidas não importadas até o fim da janela | Última batida em 27/09 | Geração bloqueada; mostra a data da última batida importada. |
+| Dia útil sem nenhuma batida importada (R34) | Nenhum funcionário bateu ponto em 15/09 | Ausências não sugeridas para a data; verificar a importação, o relógio ou o cadastro de feriados. |
+| Horizonte anterior ao início da janela | Última batida importada em 01/09 (horizonte 31/08) | Geração bloqueada; a tela mostra a última batida importada, o horizonte e os dias aguardando importação. |
+
+**Conflitos após correções no ponto (3.2).** Avaliados por ajuste não rejeitado e dia; um único tipo por ajuste/dia. "Ponto coberto" = até `min(fim da janela, horizonte)` (R33). Batida = qualquer tipo (R6). Ajustes rejeitados não geram conflito, inclusive quando a evidência volta a existir (o caminho é Reconsiderar).
+
+| Conflito | Ajustes | Critério | Tratamento esperado |
+|---|---|---|---|
+| Ausência com batida (`absence_with_punch`) | Ausências de qualquer origem e competência | Dia útil com ausência e batida do funcionário, independentemente do ponto coberto | Revisar o ajuste indicado |
+| Trabalho sem batida (`work_without_punch`) | Trabalho de origem `Timesheet` | Data no ponto coberto, sem batida do funcionário. Distingue dia com outras batidas importadas (evidência deixou de existir) de dia sem nenhuma batida importada (não é prova de que não houve trabalho) | Revisar |
+| Sugestão fora do ponto coberto (`suggestion_beyond_coverage`) | `Timesheet` | Data após o ponto coberto atual e já processada por uma execução registrada (`processed_to` ≥ data). Trabalho com batida não entra | Revisar; a cobertura recuou |
+| Cobertura anterior desconhecida (`suggestion_coverage_unknown`) | `Timesheet` | Igual ao anterior, sem execução registrada que tenha processado a data | Revisar; nenhuma cobertura histórica é presumida |
+| Ausência em dia que perdeu as batidas importadas (`absence_without_imported_punches`) | Ausências `Timesheet` | Dia útil no ponto coberto, sem batida do funcionário e sem nenhuma batida importada, somente quando fica demonstrado que todas as sugestões do ponto da competência foram criadas por execuções registradas (que só sugerem ausência em dia com batidas importadas) e a sugestão mantém data e motivo originais; sem essa demonstração o conflito não é emitido | Revisar; não prova presença |
+
+**Compensações (3.3).** Os conflitos acima também avaliam as compensações na página do destino, na data original do evento, com o ponto coberto até o horizonte; a execução que "processou a data" é a que registrou a cauda. A página da origem continua mostrando `absence_with_punch` para a compensação (ausência de qualquer competência), com a mesma ação recomendada. Conflitos de cauda (eventos sem ajuste):
+
+| Conflito | Critério | Tratamento esperado |
+|---|---|---|
+| Evento da cauda não compensado (`uncompensated_tail`) | Evento da cauda de O, até o horizonte, de participante de O e de D, sem compensação e sem ajuste do mesmo tipo, com D fechada. Exibido na página de D e na da competência seguinte a D | Ajuste `Manual` retroativo na próxima competência editável |
+| Evento da cauda sem compensação possível (`tail_not_compensable`) | Evento da cauda de funcionário que participava de O e não participa de D | Tratar administrativamente (sem elegibilidade em D o ajuste não teria efeito) |
+
+Dias úteis da cauda sem nenhuma batida importada aparecem como `Dia útil sem batidas` na página de D.
+
+Ação recomendada: competência editável → revisar o ajuste (Pendente: rejeitar ou alterar; Confirmado: rejeitar ou substituir); competência fechada → lançar ajuste `Manual` retroativo na competência seguinte (8.6), sem reabrir. Nenhuma ação é executada automaticamente.
+
+### 13.5 Premissa e limitações do horizonte de cobertura
+
+- A importação (`EmployeeIndex::importPoints`) lê um único arquivo AFD acumulado, pulando as linhas já importadas (contador em `imported_lines`), e grava `type = 'importado'`. Não existe registro das datas cobertas por importação nem identificação de relógio.
+- O horizonte supõe que o AFD é cronológico: se há registro no dia D, os dias anteriores a D estão completos. O dia D é excluído por poder estar incompleto.
+- A premissa não é verificável pelos dados. Múltiplos relógios com arquivos independentes, AFD fora de ordem ou exclusão de batidas importadas tornam o horizonte impreciso; nesses casos o conflito `Dia útil sem batidas` é a principal salvaguarda contra ausências indevidas.
+- Correções do ponto depois de uma geração não alteram ajustes existentes; desde a 3.2 são sinalizadas pelos conflitos de 13.4.
+- A tela de edição de pontos recusa no servidor a exclusão de batidas importadas e de batidas de outro funcionário ou data (3.2). Exclusões fora dessa tela (banco de dados, `tinker`) não são impedidas: o model `Point` não tem proteção.
+- Eventos da janela posteriores ao fechamento da competência são sugeridos na competência seguinte como compensação (R36–R39, versão 3.3). A geração do destino continua exigindo o horizonte no início da sua própria janela (10.2); até lá, a cauda aparece como "aguardando importação".
+- Competências fechadas antes do registro de execuções (3.1) não têm cobertura comprovável: sua cauda não é compensada automaticamente.
 
 ---
 
@@ -820,6 +865,33 @@ Situação do saldo (aguardando / aplicado / não aplicado) é derivada (6.2); n
 | `trips_per_day` | TINYINT UNSIGNED | Snapshot |
 | `daily_amount` | DECIMAL(10,2) | `fare_amount × trips_per_day` |
 
+### 17.13 `benefit_suggestion_runs` (3.1)
+
+Trilha somente de inserção das execuções da geração de sugestões do ponto (R35). Execuções bloqueadas não são registradas. Não há registros para execuções anteriores à versão 3.1.
+
+| Campo | Tipo | Observação |
+|---|---|---|
+| `benefit_period_id` | BIGINT UNSIGNED | FK `benefit_periods` CASCADE |
+| `user_id` | BIGINT UNSIGNED NULL | FK `users` SET NULL |
+| `last_imported_on` | DATE | Maior data importada observada |
+| `horizon_on` | DATE | `last_imported_on − 1` (R33) |
+| `processed_from` | DATE | Início da janela |
+| `processed_to` | DATE | `min(fim da janela, horizon_on)` |
+| `created` | INT UNSIGNED | Sugestões criadas |
+| `skipped_existing` | INT UNSIGNED | Já existentes (DD1) |
+| `skipped_covered` | INT UNSIGNED | Cobertas por outro ajuste (DD4) |
+| `skipped_unobserved_days` | INT UNSIGNED | Dias úteis sem nenhuma batida importada (R34) |
+| `tail_origin_period_id` | BIGINT UNSIGNED NULL | (3.3) FK `benefit_periods` SET NULL: origem O, quando fechada |
+| `tail_origin_run_id` | BIGINT UNSIGNED NULL | (3.3) FK `benefit_suggestion_runs` SET NULL: execução de O que define a cobertura; nula sem histórico |
+| `tail_origin_covered_until` | DATE NULL | (3.3) `processed_to` dessa execução |
+| `tail_from` / `tail_to` | DATE NULL | (3.3) Início da cauda / último dia processado |
+| `tail_pending_days` | INT UNSIGNED | (3.3) Dias da cauda aguardando importação |
+| `compensation_created` | INT UNSIGNED | (3.3) Compensações criadas (incluídas em `created`) |
+| `compensation_skipped_existing` / `compensation_skipped_covered` / `compensation_skipped_unobserved_days` / `compensation_not_compensable` | INT UNSIGNED | (3.3) Já existentes, cobertas (DD4), dias sem batidas, eventos de não participantes do destino |
+| `created_at` | TIMESTAMP | Data/hora da execução; sem `updated_at` |
+
+Índices: `INDEX(benefit_period_id, created_at)`. Execuções anteriores à 3.3 têm as colunas de cauda nulas.
+
 ---
 
 ## 18. Fluxo completo da competência
@@ -830,8 +902,8 @@ Situação do saldo (aguardando / aplicado / não aplicado) é derivada (6.2); n
 | 2 | Calcular dias-base de M | `Open` | `BusinessCalendar` sobre o mês M. |
 | 3 | Determinar elegibilidade em 01/M | `Open` | `EmployeeBenefit` vigente em 01/M define participantes e tipos. |
 | 4 | Registrar/identificar eventos previstos de M | `Open` | `Manual` (futuro `Hr`), datas dentro de M. |
-| 5 | Analisar ponto de M−1 | `Open` | Janela = mês M−1; batidas importadas até o fim da janela. |
-| 6 | Gerar sugestões `Timesheet`/`Pending` | `Open` | Idempotente; respeita cobertura (DD4); calcula conflitos. |
+| 5 | Analisar ponto de M−1 | `Open` | Janela = mês M−1, analisada até o horizonte de cobertura (R33); pode ser repetida após novas importações. |
+| 6 | Gerar sugestões `Timesheet`/`Pending` | `Open` | Incremental e idempotente; respeita cobertura (DD4); ignora dias úteis sem batidas (R34); registra a execução; calcula conflitos. |
 | 7 | Revisar ajustes | `Open` | Previstos, realizados e correções separados; painel de conflitos. |
 | 8 | Confirmar/rejeitar | `Open` | Individual ou lote; alteração por substituição. |
 | 9 | Calcular VT | → `Calculated` | Itinerário e tarifas vigentes em 01/M × dias finais. |
@@ -864,7 +936,13 @@ Não são decisões de negócio pendentes; são pontos técnicos/operacionais qu
 
 ### 20.1 Momento do cálculo × fim da janela
 
-O cálculo de M costuma ocorrer no fim de M−1 (ex.: ~28/09 para outubro), antes do fim da janela (30/09). Pela regra 10.2, a geração de sugestões só é permitida com batidas importadas até o último dia da janela. Consequência operacional: a geração de sugestões de outubro só pode rodar a partir de 01/10, ou o administrador lança manualmente (`Manual`) os eventos dos dias restantes. O plano deve deixar esse comportamento visível na tela (data da última batida importada e bloqueio explícito). Nenhum dia da janela pode ficar sem análise silenciosamente.
+O cálculo de M costuma ocorrer no fim de M−1 (ex.: 29/09 para outubro, com pagamento no penúltimo ou último dia útil), antes do fim da janela (30/09). Desde a versão 3.1 a geração de sugestões é incremental (R33–R35):
+
+- com o ponto importado até 29/09, a geração analisa 01/09 a 28/09; 29/09 e 30/09 aparecem na tela como "aguardando importação" e nenhum deles vira ausência;
+- após nova importação, uma nova execução analisa os dias que entraram no horizonte, sem duplicar o que já foi sugerido;
+- se a competência já estiver fechada quando os últimos dias forem importados, os eventos desses dias continuam sendo lançados manualmente como correção retroativa em M+1 (8.6). A sugestão automática dessa "cauda" é a etapa S3 e ainda não existe.
+
+A tela mostra a última batida importada, o horizonte, o intervalo processável, os dias aguardando importação, os dias úteis sem batidas e a última execução. Nenhum dia da janela fica sem análise silenciosamente.
 
 ### 20.2 Exclusão de funcionário
 

@@ -30,13 +30,23 @@ use Illuminate\Support\Facades\DB;
  * retornados no formato array{level: 'block'|'warning'|'info', message: string}.
  *
  * O serviço não lê batidas de ponto: a descoberta de sugestões é do
- * TimesheetAdjustmentSuggester, que usa registerSuggestion().
+ * TimesheetAdjustmentSuggester, que usa registerSuggestion() e registerCompensation().
+ *
+ * Exceção única à regra "origem Timesheet só em eventos realizados": a compensação da
+ * cauda de uma competência fechada (F12/S3), aceita somente por registerCompensation()
+ * e, na edição, somente para ajustes cuja dedupe_key tem o prefixo de compensação.
  */
 class BenefitAdjustmentRegistrar
 {
+    /**
+     * Prefixo da dedupe_key de compensação: "timesheet-comp:{origem}:{funcionário}:{data}:{motivo}".
+     */
+    public const COMPENSATION_KEY_PREFIX = 'timesheet-comp:';
+
     public function __construct(
         private BusinessCalendar $calendar,
         private BenefitPeriodWorkflow $workflow,
+        private BenefitEligibility $eligibility,
     ) {}
 
     /**
@@ -100,6 +110,64 @@ class BenefitAdjustmentRegistrar
     }
 
     /**
+     * Registra a compensação de um evento da cauda da competência de origem (fechada)
+     * na competência imediatamente seguinte: origem Timesheet, status Pending, classe
+     * retroativa. Idempotente pela chave de compensação, que é da origem: em qualquer
+     * status e em qualquer competência, uma compensação existente nunca é recriada.
+     *
+     * Sob bloqueio da origem e depois do destino, valida: origem fechada e imediatamente
+     * anterior ao destino; data posterior à cobertura registrada da origem (maior
+     * processed_to das suas execuções) e dentro da janela da origem; funcionário
+     * participante da origem e do destino.
+     *
+     * @return array{adjustment: BenefitAdjustment, alerts: list<array{level: string, message: string}>, created: bool}
+     *
+     * @throws DomainException
+     */
+    public function registerCompensation(BenefitPeriod $destination, BenefitPeriod $origin, Employee $employee, AdjustmentReason $reason, CarbonInterface $date, string $notes): array
+    {
+        $day = $this->toDate($date);
+        $dedupeKey = $this->compensationKey($origin, $employee, $reason, $day);
+
+        try {
+            [$adjustment, $created] = DB::transaction(function () use ($destination, $origin, $employee, $reason, $day, $notes, $dedupeKey) {
+                $lockedOrigin = BenefitPeriod::query()->lockForUpdate()->findOrFail($origin->id);
+                $lockedDestination = $this->lockEditablePeriod($destination);
+
+                $this->ensureCompensable($lockedDestination, $lockedOrigin, $employee, $reason, $day);
+
+                $existing = BenefitAdjustment::query()->where('dedupe_key', $dedupeKey)->first();
+
+                if ($existing !== null) {
+                    return [$existing, false];
+                }
+
+                return [$this->createAdjustment($lockedDestination, $employee, $reason, AdjustmentSource::Timesheet, $day, $day, $notes, [], $dedupeKey, compensation: true), true];
+            });
+        } catch (UniqueConstraintViolationException) {
+            [$adjustment, $created] = [BenefitAdjustment::query()->where('dedupe_key', $dedupeKey)->firstOrFail(), false];
+        }
+
+        return [...$this->result($adjustment), 'created' => $created];
+    }
+
+    /**
+     * Chave de deduplicação de uma compensação: identifica o evento pela origem.
+     */
+    public function compensationKey(BenefitPeriod $origin, Employee $employee, AdjustmentReason $reason, CarbonInterface $date): string
+    {
+        return self::COMPENSATION_KEY_PREFIX.$origin->id.':'.$employee->id.':'.$date->toDateString().':'.$reason->name;
+    }
+
+    /**
+     * O ajuste foi criado como compensação (registerCompensation).
+     */
+    public function isCompensation(BenefitAdjustment $adjustment): bool
+    {
+        return str_starts_with((string) $adjustment->dedupe_key, self::COMPENSATION_KEY_PREFIX);
+    }
+
+    /**
      * Chave de deduplicação de uma sugestão do ponto (DD1).
      */
     public function suggestionKey(BenefitPeriod $period, Employee $employee, AdjustmentReason $reason, CarbonInterface $date): string
@@ -134,8 +202,13 @@ class BenefitAdjustmentRegistrar
 
             $start = $this->toDate($startsOn);
             $end = $this->toDate($endsOn);
+            $compensation = $this->isCompensation($adjustment);
 
-            $prepared = $this->prepare($lockedPeriod, $reason, $adjustment->source, $start, $end, $notes, $impacts, checkReasonSource: false);
+            if ($compensation && (! $start->equalTo($adjustment->starts_on) || ! $end->equalTo($adjustment->ends_on))) {
+                throw new DomainException('A data de uma compensação não pode ser alterada: ela identifica o evento da competência de origem. Altere apenas o motivo ou a observação, ou rejeite a compensação.');
+            }
+
+            $prepared = $this->prepare($lockedPeriod, $reason, $adjustment->source, $start, $end, $notes, $impacts, checkReasonSource: false, compensation: $compensation);
             $this->ensureNoDuplicate($lockedPeriod, (int) $adjustment->employee_id, $reason, $start, $end, $adjustment->id);
 
             $this->invalidateCalculation($lockedPeriod);
@@ -423,12 +496,13 @@ class BenefitAdjustmentRegistrar
         array $impacts,
         ?string $dedupeKey = null,
         ?BenefitAdjustment $relatedAdjustment = null,
+        bool $compensation = false,
     ): BenefitAdjustment {
         if (! $employee->exists) {
             throw new DomainException('Funcionário inválido.');
         }
 
-        $prepared = $this->prepare($lockedPeriod, $reason, $source, $start, $end, $notes, $impacts);
+        $prepared = $this->prepare($lockedPeriod, $reason, $source, $start, $end, $notes, $impacts, compensation: $compensation);
         $this->ensureNoDuplicate($lockedPeriod, $employee->id, $reason, $start, $end);
 
         $this->invalidateCalculation($lockedPeriod);
@@ -456,7 +530,9 @@ class BenefitAdjustmentRegistrar
     }
 
     /**
-     * Regras de motivo, origem, datas, observação e impactos.
+     * Regras de motivo, origem, datas, observação e impactos. `$compensation` só é
+     * verdadeiro em registerCompensation() e na edição de uma compensação: a origem
+     * Timesheet passa a aceitar somente a classe retroativa.
      *
      * @param  array<string, int>  $impacts
      * @return array{days_count: int, impacts: array<string, int>, notes: ?string, timing: AdjustmentTiming}
@@ -472,6 +548,7 @@ class BenefitAdjustmentRegistrar
         ?string $notes,
         array $impacts,
         bool $checkReasonSource = true,
+        bool $compensation = false,
     ): array {
         $notes = $this->nullableText($notes);
 
@@ -489,7 +566,15 @@ class BenefitAdjustmentRegistrar
 
         $timing = $this->timing($period, $start, $end);
 
-        if (! in_array($timing, $this->allowedTimings($source), true)) {
+        $allowedTimings = $compensation && $source === AdjustmentSource::Timesheet
+            ? [AdjustmentTiming::Retroactive]
+            : $this->allowedTimings($source);
+
+        if ($compensation && ! in_array($timing, $allowedTimings, true)) {
+            throw new DomainException('Uma compensação deve ter data anterior à janela de eventos realizados da competência ('.$period->windowStart()->format('d/m/Y').').');
+        }
+
+        if (! in_array($timing, $allowedTimings, true)) {
             throw new DomainException($source === AdjustmentSource::Timesheet
                 ? 'Sugestões do ponto devem estar dentro da janela de eventos realizados ('.$period->windowStart()->format('d/m/Y').' a '.$period->windowEnd()->format('d/m/Y').').'
                 : 'Ajustes de origem '.$source->label().' não podem ser lançados como '.mb_strtolower($timing->label()).'.');
@@ -603,6 +688,42 @@ class BenefitAdjustmentRegistrar
             AdjustmentSource::Timesheet => [AdjustmentTiming::Realized],
             AdjustmentSource::Import => [AdjustmentTiming::Realized, AdjustmentTiming::Retroactive],
         };
+    }
+
+    /**
+     * Regras de elegibilidade de uma compensação (F12/S3), com origem e destino bloqueados.
+     *
+     * @throws DomainException
+     */
+    private function ensureCompensable(BenefitPeriod $destination, BenefitPeriod $origin, Employee $employee, AdjustmentReason $reason, CarbonImmutable $day): void
+    {
+        if ($origin->status !== BenefitPeriodStatus::Closed) {
+            throw new DomainException('A competência de origem '.$origin->competence->format('m/Y').' não está fechada: seus eventos são tratados na própria competência.');
+        }
+
+        if (! $origin->referenceDate()->equalTo($destination->referenceDate()->subMonthNoOverflow())) {
+            throw new DomainException('A compensação só pode ser lançada na competência imediatamente seguinte à de origem ('.$origin->referenceDate()->addMonthNoOverflow()->format('m/Y').').');
+        }
+
+        if (! $reason->isAbsence() && ! $reason->isWork()) {
+            throw new DomainException('A compensação exige um motivo de ausência ou de trabalho.');
+        }
+
+        $coverageRun = $origin->coverageRun();
+
+        if ($coverageRun === null) {
+            throw new DomainException('A competência de origem '.$origin->competence->format('m/Y').' não tem execução registrada da geração do ponto: a cobertura não pode ser comprovada.');
+        }
+
+        if ($day->lessThanOrEqualTo($coverageRun->processed_to) || $day->greaterThan($origin->windowEnd())) {
+            throw new DomainException('A data '.$day->format('d/m/Y').' não está na cauda da competência '.$origin->competence->format('m/Y')
+                .' ('.$coverageRun->processed_to->addDay()->format('d/m/Y').' a '.$origin->windowEnd()->format('d/m/Y').').');
+        }
+
+        if (! $this->eligibility->participants($origin->referenceDate())->has($employee->id)
+            || ! $this->eligibility->participants($destination->referenceDate())->has($employee->id)) {
+            throw new DomainException('A compensação exige que o funcionário participe da competência de origem e da de destino.');
+        }
     }
 
     /**

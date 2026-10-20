@@ -14,7 +14,8 @@
                         {{ $calendarBusinessDays }} (pelo calendário atual; congelado no cálculo)
                     @endif
                 </span>
-                <span>Última batida importada: {{ $lastImportedPointDate?->format('d/m/Y') ?? 'nenhuma' }}</span>
+                <span>Última batida importada: {{ $importCoverage['last_imported']?->format('d/m/Y') ?? 'nenhuma' }}</span>
+                <span>Ponto considerado completo até: {{ $importCoverage['horizon']?->format('d/m/Y') ?? '—' }}</span>
             </div>
         </div>
         <div class="flex gap-2">
@@ -46,19 +47,47 @@
                 <div>
                     <h2 class="text-lg font-semibold">Sugestões do ponto</h2>
                     <p class="text-sm text-gray-500">
-                        Analisa as batidas de {{ $period->windowStart()->format('d/m/Y') }} a {{ $period->windowEnd()->format('d/m/Y') }}: dia útil sem batida sugere ausência; sábado, domingo ou feriado com batida sugere dia trabalhado. As sugestões entram como pendentes.
+                        Analisa as batidas da janela {{ $period->windowStart()->format('d/m/Y') }} a {{ $period->windowEnd()->format('d/m/Y') }} somente até o dia anterior à última batida importada, pois esse dia pode estar incompleto: dia útil sem batida sugere ausência; sábado, domingo ou feriado com batida sugere dia trabalhado. As sugestões entram como pendentes. Após novas importações, gere novamente para analisar os dias seguintes.
                     </p>
                 </div>
                 <x-ui-button primary icon="arrow-path" wire:click="generateSuggestions" :disabled="$generationBlocker !== null">Gerar sugestões do ponto</x-ui-button>
             </div>
+            <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-700">
+                <span>Intervalo processável: {{ $importCoverage['to'] !== null ? $importCoverage['from']->format('d/m/Y').' a '.$importCoverage['to']->format('d/m/Y') : 'nenhum' }}</span>
+                @if ($importCoverage['to'] === null || $importCoverage['to']->lessThan($period->windowEnd()))
+                    <span class="text-amber-800">Aguardando importação: {{ ($importCoverage['to']?->addDay() ?? $period->windowStart())->format('d/m/Y') }} a {{ $period->windowEnd()->format('d/m/Y') }}</span>
+                @endif
+                <span>Dias úteis sem nenhuma batida: {{ $daysWithoutPunches }}</span>
+            </div>
+            @if ($tailMessage !== null)
+                <div class="mt-2 text-sm text-amber-800">{{ $tailMessage }}</div>
+            @endif
             @if ($generationBlocker !== null)
                 <div class="mt-2 text-sm text-red-700">{{ $generationBlocker }}</div>
             @endif
             @if ($generationSummary !== null)
                 <div class="mt-2 text-sm">
+                    Processado de {{ \Carbon\CarbonImmutable::parse($generationSummary['processed_from'])->format('d/m/Y') }} a {{ \Carbon\CarbonImmutable::parse($generationSummary['processed_to'])->format('d/m/Y') }} ·
                     Sugestões geradas: {{ $generationSummary['created'] }} ·
                     Já existentes: {{ $generationSummary['skipped_existing'] }} ·
-                    Ignoradas por cobertura: {{ $generationSummary['skipped_covered'] }}
+                    Ignoradas por cobertura: {{ $generationSummary['skipped_covered'] }} ·
+                    Dias úteis sem batidas: {{ $generationSummary['skipped_unobserved_days'] }}
+                    @if ($generationSummary['tail_status'] === 'processable')
+                        <div>Compensações da competência anterior ({{ \Carbon\CarbonImmutable::parse($generationSummary['tail_from'])->format('d/m/Y') }} a {{ \Carbon\CarbonImmutable::parse($generationSummary['tail_to'])->format('d/m/Y') }}): {{ $generationSummary['compensation_created'] }} criada(s) · {{ $generationSummary['compensation_skipped_existing'] }} já existente(s) · {{ $generationSummary['compensation_skipped_covered'] }} coberta(s) · {{ $generationSummary['compensation_skipped_unobserved_days'] }} dia(s) útil(eis) sem batidas · {{ $generationSummary['compensation_not_compensable'] }} sem participação no destino</div>
+                    @endif
+                </div>
+            @endif
+            @if ($lastSuggestionRun !== null)
+                <div class="mt-2 text-sm text-gray-500">
+                    Última execução: {{ $lastSuggestionRun->created_at->format('d/m/Y H:i') }}
+                    por {{ $lastSuggestionRun->user?->name ?? 'usuário removido' }} ·
+                    intervalo {{ $lastSuggestionRun->processed_from->format('d/m/Y') }} a {{ $lastSuggestionRun->processed_to->format('d/m/Y') }}
+                    (ponto completo até {{ $lastSuggestionRun->horizon_on->format('d/m/Y') }}) ·
+                    {{ $lastSuggestionRun->created }} criada(s), {{ $lastSuggestionRun->skipped_existing }} já existente(s),
+                    {{ $lastSuggestionRun->skipped_covered }} coberta(s), {{ $lastSuggestionRun->skipped_unobserved_days }} dia(s) útil(eis) sem batidas
+                    @if ($lastSuggestionRun->tail_from !== null && $lastSuggestionRun->tail_to !== null)
+                        · cauda {{ $lastSuggestionRun->tail_from->format('d/m/Y') }} a {{ $lastSuggestionRun->tail_to->format('d/m/Y') }}: {{ $lastSuggestionRun->compensation_created }} compensação(ões) criada(s)
+                    @endif
                 </div>
             @endif
         </div>
@@ -67,15 +96,35 @@
     <div class="rounded border border-gray-200 p-4">
         <h2 class="text-lg font-semibold">Conflitos para revisão</h2>
         @forelse ($conflicts as $conflict)
-            <div class="mt-1 text-sm {{ in_array($conflict['type'], ['absence_with_punch', 'work_on_absence', 'duplicated_pis'], true) ? 'text-amber-800' : 'text-blue-800' }}" wire:key="conflict-{{ $loop->index }}">
-                {{ match ($conflict['type']) {
-                    'absence_with_punch' => 'Ausência com batida',
-                    'work_on_absence' => 'Trabalho em dia de ausência',
-                    'employee_rescinded' => 'Funcionário com rescisão',
-                    'unknown_pis' => 'PIS desconhecido',
-                    'duplicated_pis' => 'PIS duplicado',
-                    default => 'Conflito',
-                } }}: {{ $conflict['message'] }}
+            <div class="mt-2 text-sm {{ in_array($conflict['type'], ['employee_rescinded', 'unknown_pis'], true) ? 'text-blue-800' : 'text-amber-800' }}" wire:key="conflict-{{ $loop->index }}">
+                <div>
+                    <span class="font-semibold">{{ match ($conflict['type']) {
+                        'absence_with_punch' => 'Ausência com batida',
+                        'work_on_absence' => 'Trabalho em dia de ausência',
+                        'work_without_punch' => 'Trabalho sem batida',
+                        'suggestion_beyond_coverage' => 'Sugestão fora do ponto coberto',
+                        'suggestion_coverage_unknown' => 'Sugestão com cobertura anterior desconhecida',
+                        'absence_without_imported_punches' => 'Ausência em dia que perdeu as batidas importadas',
+                        'employee_rescinded' => 'Funcionário com rescisão',
+                        'unknown_pis' => 'PIS desconhecido',
+                        'duplicated_pis' => 'PIS duplicado',
+                        'day_without_punches' => 'Dia útil sem batidas',
+                        'uncompensated_tail' => 'Evento da cauda não compensado',
+                        'tail_not_compensable' => 'Evento da cauda sem compensação possível',
+                        default => 'Conflito',
+                    } }}</span>@if ($conflict['date'] !== null) ({{ \Carbon\CarbonImmutable::parse($conflict['date'])->format('d/m/Y') }})@endif: {{ $conflict['message'] }}
+                </div>
+                @if ($conflict['coverage'] !== null)
+                    <div class="ml-4 text-gray-600">Cobertura do ponto: {{ $conflict['coverage'] }}</div>
+                @endif
+                @if ($conflict['action'] !== null)
+                    <div class="ml-4 text-gray-600">
+                        Ação recomendada (revisão manual): {{ $conflict['action'] }}
+                        @if ($conflict['adjustment_id'] !== null)
+                            <a href="#adjustment-{{ $conflict['adjustment_id'] }}" class="underline">Ver ajuste #{{ $conflict['adjustment_id'] }}</a>
+                        @endif
+                    </div>
+                @endif
             </div>
         @empty
             <p class="mt-1 text-sm text-gray-500">Nenhum conflito encontrado.</p>
@@ -130,7 +179,7 @@
                     <tbody>
                         @forelse ($section['adjustments'] as $adjustment)
                             @php($impacts = $adjustment->impacts->keyBy(fn ($impact) => $impact->benefit_type->value))
-                            <tr class="border-t border-gray-200 align-top {{ $adjustment->status->value === 'rejected' ? 'text-gray-400' : '' }}" wire:key="adjustment-{{ $adjustment->id }}">
+                            <tr class="border-t border-gray-200 align-top {{ $adjustment->status->value === 'rejected' ? 'text-gray-400' : '' }}" id="adjustment-{{ $adjustment->id }}" wire:key="adjustment-{{ $adjustment->id }}">
                                 <td class="p-2 text-center">
                                     @if ($isEditable && $adjustment->status->value === 'pending')
                                         <input type="checkbox" wire:model.live="selected" value="{{ $adjustment->id }}" />

@@ -255,10 +255,45 @@ class BenefitPeriodAdjustments extends Component
 
         $this->notification()->success(
             $title = 'Sugestões do Ponto',
-            $description = 'Sugestões geradas: '.$this->generationSummary['created']
+            $description = 'Processado de '.CarbonImmutable::parse($this->generationSummary['processed_from'])->format('d/m/Y')
+                .' a '.CarbonImmutable::parse($this->generationSummary['processed_to'])->format('d/m/Y')
+                .'. Sugestões geradas: '.$this->generationSummary['created']
                 .'. Já existentes: '.$this->generationSummary['skipped_existing']
-                .'. Ignoradas por cobertura: '.$this->generationSummary['skipped_covered'].'.'
+                .'. Ignoradas por cobertura: '.$this->generationSummary['skipped_covered']
+                .'. Dias úteis sem batidas: '.$this->generationSummary['skipped_unobserved_days'].'.'
+                .($this->generationSummary['tail_status'] === 'processable' ? ' Compensações da competência anterior criadas: '.$this->generationSummary['compensation_created'].'.' : '')
         );
+    }
+
+    /**
+     * Situação da cauda da competência anterior (F12/S3) para o painel de sugestões.
+     *
+     * @param  array<string, mixed>  $tail
+     */
+    private function tailMessage(array $tail): ?string
+    {
+        if ($tail['status'] === 'none') {
+            return null;
+        }
+
+        $origin = $tail['origin']->competence->format('m/Y');
+
+        if ($tail['status'] === 'no_history') {
+            return 'A competência '.$origin.' foi fechada sem execução registrada da geração do ponto. Não é possível verificar quais dias de '
+                .$tail['origin']->windowStart()->format('d/m/Y').' a '.$tail['window_end']->format('d/m/Y')
+                .' foram apurados. Se houver eventos não considerados, lance ajustes Manuais retroativos nesta competência.';
+        }
+
+        $coverage = 'Compensação da competência '.$origin.': cobertura registrada até '.$tail['covered_until']->format('d/m/Y')
+            .' (execução #'.$tail['origin_run']->id.' de '.$tail['origin_run']->created_at->format('d/m/Y H:i').')';
+
+        return match ($tail['status']) {
+            'complete' => $coverage.'; nenhum dia a compensar.',
+            'waiting' => $coverage.'. Dias a compensar: '.$tail['from']->format('d/m/Y').' a '.$tail['window_end']->format('d/m/Y').', aguardando importação.',
+            default => $coverage.'. Dias a compensar: '.$tail['from']->format('d/m/Y').' a '.$tail['to']->format('d/m/Y').' processáveis'
+                .($tail['pending_from'] !== null ? '; aguardando importação: '.$tail['pending_from']->format('d/m/Y').' a '.$tail['window_end']->format('d/m/Y') : '')
+                .'. As compensações entram como pendentes, com classe retroativa.',
+        };
     }
 
     public function render(BenefitAdjustmentRegistrar $registrar, BusinessCalendar $calendar, TimesheetAdjustmentSuggester $suggester): View
@@ -281,6 +316,9 @@ class BenefitPeriodAdjustments extends Component
                 'adjustments' => $adjustments->filter(fn (BenefitAdjustment $adjustment) => $period->timingOf($adjustment->starts_on, $adjustment->ends_on) === $timing)->values(),
             ]]);
 
+        $importCoverage = $suggester->importCoverage($period);
+        $conflicts = $suggester->conflicts($period);
+
         return view('livewire.benefits.benefit-period-adjustments', [
             'period' => $period,
             'isEditable' => $period->status->isEditable(),
@@ -289,9 +327,12 @@ class BenefitPeriodAdjustments extends Component
             'sections' => $sections,
             'alerts' => $registrar->alertsFor($period, $adjustments),
             'benefitTypes' => BenefitType::cases(),
-            'lastImportedPointDate' => $suggester->lastImportedPointDate(),
-            'generationBlocker' => $suggester->generationBlocker($period),
-            'conflicts' => $suggester->conflicts($period),
+            'importCoverage' => $importCoverage,
+            'tailMessage' => $this->tailMessage($suggester->tailCoverage($period, $importCoverage)),
+            'generationBlocker' => $suggester->generationBlocker($period, $importCoverage),
+            'lastSuggestionRun' => $period->suggestionRuns()->with('user:id,name')->latest('id')->first(),
+            'conflicts' => $conflicts,
+            'daysWithoutPunches' => collect($conflicts)->where('type', 'day_without_punches')->count(),
             'formPreview' => $this->showFormModal ? $this->formPreview($registrar) : null,
             'employeeOptions' => Employee::query()->orderBy('name')->get(['id', 'name'])
                 ->map(fn (Employee $employee) => ['id' => $employee->id, 'name' => $employee->name])
