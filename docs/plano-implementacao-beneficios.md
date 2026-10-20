@@ -909,7 +909,7 @@ Competência 10/2026, janela 01–30/09, ponto "completo" via colega não partic
 6. Golden Dataset, registrar, workflow, calculadora, carry-forward e importação AFD sem diff.
 7. Spec §13.4/§13.5 atualizadas com os tipos implementados; S3 continua documentada como não implementada.
 
-##### S2-9. Riscos, limitações e decisões pendentes
+##### S2-9. Riscos, limitações e decisões (aprovadas e implementadas; S2-P7 segue em aberto como decisão separada)
 
 | # | Item | Proposta |
 |---|---|---|
@@ -971,7 +971,7 @@ Exemplo-guia: O = 10/2026 (janela 01–30/09) fechada em 29/09 com `covered(O)` 
 | `BenefitPeriodWorkflow` | Calcular/fechar M exige M−1 fechada; reabrir M exige M+1 não fechada e invalida M+1 calculada; trava M e depois M+1. Competências são criadas em sequência. | D só é calculada com O fechada; uma reabertura de O invalida D calculada (existente). Ordem de travas O → D já usada por `reopen`. |
 | `benefit_suggestion_runs` | Guarda intervalo da janela própria (`processed_from/to`), horizonte e contadores. Sem informação de cauda. | Sem colunas novas não há como provar, depois, que uma execução de D processou a cauda (necessário para C3/C4 e auditoria). |
 
-##### S3-2. Decisões de negócio pendentes (para aprovação)
+##### S3-2. Decisões de negócio (aprovadas e implementadas)
 
 | # | Decisão | Recomendação | Alternativa / impacto |
 |---|---|---|---|

@@ -622,6 +622,64 @@ describe('origin preservation and locking', function () {
             ->and(($this->compensations)())->toHaveCount(1);
     });
 
+    test('a failure after the writes rolls back the suggestions, the compensations and the run', function () {
+        ($this->closeOrigin)();
+        $originRun = BenefitSuggestionRun::sole();
+        ($this->importUntil)('2026-10-31', anaAbsent: ['2026-09-30', '2026-10-14', '2026-10-15']);
+        $existing = BenefitAdjustment::factory()->for($this->destination)->for($this->ana)->create([
+            'reason' => AdjustmentReason::Vacation,
+            'starts_on' => '2026-10-14',
+            'ends_on' => '2026-10-14',
+        ]);
+        $this->destination->forceFill(['status' => BenefitPeriodStatus::Calculated, 'business_days' => 21])->save();
+
+        $snapshot = fn () => [
+            DB::table('benefit_periods')->orderBy('id')->get()->toArray(),
+            DB::table('benefit_period_status_changes')->orderBy('id')->get()->toArray(),
+            DB::table('benefit_adjustments')->orderBy('id')->get()->toArray(),
+            DB::table('benefit_adjustment_impacts')->orderBy('id')->get()->toArray(),
+            DB::table('benefit_suggestion_runs')->orderBy('id')->get()->toArray(),
+        ];
+        $before = $snapshot();
+        $baseLevel = DB::transactionLevel();
+
+        $failing = true;
+        $seenBeforeFailure = null;
+        BenefitSuggestionRun::creating(function () use (&$failing, &$seenBeforeFailure, $baseLevel) {
+            if (! $failing) {
+                return;
+            }
+
+            $seenBeforeFailure = [
+                'inside_transaction' => DB::transactionLevel() > $baseLevel,
+                'suggestions' => BenefitAdjustment::query()->where('benefit_period_id', $this->destination->id)->where('dedupe_key', 'like', 'timesheet:%')->count(),
+                'compensations' => ($this->compensations)()->count(),
+                'status' => BenefitPeriod::query()->whereKey($this->destination->id)->value('status'),
+            ];
+
+            throw new RuntimeException('Falha simulada ao gravar a execução.');
+        });
+
+        expect(fn () => $this->suggester->generate($this->destination))->toThrow(RuntimeException::class, 'Falha simulada');
+
+        expect($seenBeforeFailure)->toBe([
+            'inside_transaction' => true,
+            'suggestions' => 1,
+            'compensations' => 1,
+            'status' => BenefitPeriodStatus::Open,
+        ])
+            ->and($snapshot())->toEqual($before)
+            ->and(BenefitAdjustment::query()->where('benefit_period_id', $this->destination->id)->pluck('id')->all())->toBe([$existing->id])
+            ->and($this->destination->fresh()->status)->toBe(BenefitPeriodStatus::Calculated)
+            ->and(BenefitSuggestionRun::sole()->id)->toBe($originRun->id)
+            ->and(DB::transactionLevel())->toBe($baseLevel);
+
+        $failing = false;
+
+        expect($this->suggester->generate($this->destination))->toMatchArray(['created' => 2, 'compensation_created' => 1, 'skipped_covered' => 1])
+            ->and($this->destination->suggestionRuns()->count())->toBe(1);
+    });
+
     test('the origin is locked before the destination', function () {
         ($this->closeOrigin)();
         ($this->importUntil)('2026-10-31', anaAbsent: ['2026-09-30']);
