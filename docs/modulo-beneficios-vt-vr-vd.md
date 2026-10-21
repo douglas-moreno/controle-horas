@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| Versão | 3.3 |
+| Versão | 3.4 |
 | Status | **Especificação definitiva** |
 | Data | 29/09/2026 (3.0) · 20/10/2026 (3.1, 3.2, 3.3) |
 | Escopo | Vale Transporte (VT), Vale Refeição (VR), Vale Desjejum (VD) |
@@ -53,6 +53,7 @@
 | **3.1** | **Geração incremental de sugestões do ponto (etapa S1).** A geração deixa de exigir o ponto importado até o fim da janela: processa a janela até o **horizonte de cobertura** (último dia importado − 1), pode ser repetida após novas importações e registra cada execução (`benefit_suggestion_runs`). Dia útil sem nenhuma batida importada não gera ausência e é sinalizado como conflito. Regras R33–R35. Conflitos de importações corrigidas (S2) e cauda retroativa para a competência seguinte (S3) **não fazem parte desta versão**. |
 | **3.2** | **Conflitos após correções no ponto (etapa S2).** Novos conflitos calculados (não persistidos) comparam ajustes existentes com a evidência atual do ponto: trabalho sem batida, sugestão fora do ponto coberto (cobertura anterior conhecida ou desconhecida) e ausência em dia que perdeu as batidas importadas; `absence_with_punch` passa a identificar o ajuste. Todo conflito informa ajuste, cobertura e ação recomendada. Conflitos não alteram ajustes e não bloqueiam confirmação nem fechamento. Batidas importadas não podem ser excluídas pela tela de edição de pontos. Cauda retroativa (S3) **continua fora**. |
 | **3.3** | **Compensação entre competências (etapa S3).** Eventos da janela de uma competência fechada posteriores à sua cobertura registrada ("cauda") são sugeridos na competência imediatamente seguinte como compensação: origem `Timesheet`, classe retroativa, somente por um caminho dedicado e validado (R36–R39). Conflitos C1–C5 avaliam também as compensações; novos conflitos de cauda não compensada e não compensável. Competências fechadas nunca recebem lançamentos automáticos. |
+| **3.4** | **Importação AFD (F13).** A origem de `points` passa a ser validada: somente o layout da Portaria MTE 1510/2009, somente marcações (tipo 3) válidas, identidade REP + NSR e controle incremental por NSR (13.5). Nenhuma regra de benefício, horizonte (R33) ou compensação muda. O saneamento das batidas importadas antes desta versão e a limitação do horizonte a `min(H, ontem)` (S2-P7) seguem pendentes. |
 
 ---
 
@@ -613,7 +614,8 @@ Ação recomendada: competência editável → revisar o ajuste (Pendente: rejei
 
 ### 13.5 Premissa e limitações do horizonte de cobertura
 
-- A importação (`EmployeeIndex::importPoints`) lê um único arquivo AFD acumulado, pulando as linhas já importadas (contador em `imported_lines`), e grava `type = 'importado'`. Não existe registro das datas cobertas por importação nem identificação de relógio.
+- Desde a 3.4, a importação (`AfdImporter`, chamado por `EmployeeIndex::importPoints`) aceita somente o AFD da Portaria MTE 1510/2009 (Anexo I), valida o arquivo inteiro antes de gravar e grava `type = 'importado'` apenas para marcações (tipo 3) válidas, identificadas por REP e NSR (`UNIQUE(rep_serial, nsr)`). Cabeçalho, trailer e registros dos tipos 2, 4 e 5 não geram batidas. O controle incremental é o maior NSR examinado por REP (`afd_reps.processed_to_nsr`), não mais a contagem de linhas (`imported_lines`, mantida somente para a transição). Marcações inválidas são registradas por NSR e motivo, sem dados pessoais. Detalhes no plano, F13.
+- Batidas importadas antes da 3.4 não têm REP nem NSR e podem incluir registros indevidos (trailers em 0005-11-30 e registros dos tipos 2, 4 e 5) e lacunas (uma marcação perdida por importação incremental). O saneamento desse histórico é uma etapa separada, ainda não executada; até lá, o horizonte e as sugestões podem refletir esses registros. Não existe registro das datas cobertas por importação.
 - O horizonte supõe que o AFD é cronológico: se há registro no dia D, os dias anteriores a D estão completos. O dia D é excluído por poder estar incompleto.
 - A premissa não é verificável pelos dados. Múltiplos relógios com arquivos independentes, AFD fora de ordem ou exclusão de batidas importadas tornam o horizonte impreciso; nesses casos o conflito `Dia útil sem batidas` é a principal salvaguarda contra ausências indevidas.
 - Correções do ponto depois de uma geração não alteram ajustes existentes; desde a 3.2 são sinalizadas pelos conflitos de 13.4.

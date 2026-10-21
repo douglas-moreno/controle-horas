@@ -5,7 +5,7 @@
 | Base | `docs/modulo-beneficios-vt-vr-vd.md` — versão 3.0 (Especificação definitiva) |
 | Data | 29/09/2026 |
 | Fontes analisadas | Código do projeto (branch `main`, commit `145278e`), banco SQLite local (somente leitura), planilha `VT e VR -09.2026.xlsx` (somente leitura) |
-| Status | F0–F11 implementadas · F12/S1 (geração incremental), F12/S2 (conflitos após correções no ponto) e F12/S3 (compensação entre competências) implementadas em 20/10/2026 |
+| Status | F0–F11 implementadas · F12/S1 (geração incremental), F12/S2 (conflitos após correções no ponto) e F12/S3 (compensação entre competências) implementadas em 20/10/2026 · F13 (importação AFD por REP e NSR) implementada em 20/10/2026; saneamento histórico e S2-P7 pendentes |
 
 > Convenção de referência: "Spec §N" = seção N da especificação 3.0. "Rn" = regra Rn da especificação.
 > A planilha contém dados pessoais (CPF, dados bancários). Este documento os omite; cenários são referenciados pela **linha** da aba `Controle VT-VR`.
@@ -1163,6 +1163,58 @@ Não alterados: `BenefitPeriodCalculator`, `BenefitPeriodWorkflow` (fechamento, 
 | 8 | Docs (Spec 3.3; plano) | 1–7 |
 | 9 | Regressão completa SQLite + MySQL, Pint, rollback da migration, diff final | 1–8 |
 
+### F13 — Importação AFD (correção do parser)
+
+Status: **implementada em 20/10/2026** com as decisões D1–D7 aprovadas. Fora da F12: corrige a origem dos dados de `points`, sem alterar cálculo, workflow, carry-forward, snapshots, compensações, horizonte (R33) nem os consumidores de `points`.
+
+**Diagnóstico (importador anterior, `EmployeeIndex::importPoints` até o commit `19ac5d3`).** Lia qualquer linha como marcação, convertia a data com `Carbon::createFromFormat('dmY')` (que transborda em vez de falhar) e controlava a importação incremental pela quantidade de linhas consumidas (`imported_lines.line_number`, trailer incluído, 9 linhas puladas sem histórico). Efeitos comprovados nos dados de desenvolvimento (somente leitura): o trailer de cada importação gravado como batida em 0005-11-30 (156); registros dos tipos 2, 4 e 5 gravados como batidas; a marcação que, no AFD cumulativo seguinte, ocupa a posição do trailer anterior nunca importada (142 até 22/09/2026, além da linha 7 da primeira importação). O ajuste #73 (10/2026) decorre de uma dessas perdas e aguarda revisão do RH; nada foi alterado nele.
+
+**Layout suportado.** Portaria MTE 1510/2009, Anexo I, item 1 (confirmado no AFD do REP em uso: tamanhos 232/299/34/34/87/46, contadores do trailer e NSR contínuo). Outros layouts — incluindo o da Portaria 671/2021 — são recusados, sem gravar batidas.
+
+| Tipo | Posições usadas | Gera batida |
+|---|---|---|
+| 1 Cabeçalho (232) | NSR `000000000`; nº de fabricação do REP 188-204; datas 205-228; hora 229-232 | Não |
+| 2 Empresa (299) | data 011-018, hora 019-022, identificador 023-037 | Não |
+| **3 Marcação (34)** | data 011-018, hora 019-022, **PIS 023-034** | **Sim** |
+| 4 Ajuste do relógio (34) | datas e horas 011-034 | Não |
+| 5 Empregado (87) | data, hora, operação I/A/E 023, PIS 024-035, nome 036-087 | Não (sincronização cadastral fora do escopo) |
+| Trailer (46) | `999999999`, quantidades dos tipos 2–5, `9` | Não |
+
+O importador anterior lia o PIS do tipo 3 em 024-035 (11 dígitos + terminador); só funcionava porque o PIS de 11 dígitos tem zero à esquerda no campo de 12. O valor gravado em `points.pis` (BIGINT) é o mesmo nos dois casos.
+
+**Decisões.**
+
+| # | Decisão |
+|---|---|
+| D1 | Identidade da marcação = REP + NSR: `UNIQUE(points.rep_serial, points.nsr)`. Marcações no mesmo minuto com NSRs diferentes são preservadas; não há deduplicação por data/hora/PIS. |
+| D2 | Schema aditivo e reversível: `afd_reps`, `afd_imports`, `afd_import_rejections`; em `points`, `rep_serial`, `nsr` e `afd_import_id` nuláveis. Linhas antigas ficam nulas até um procedimento histórico separado. |
+| D3 | Somente o tipo 3 gera `Point`; tipos 1, 2, 4, 5 e trailer são contados. |
+| D4 | Erro estrutural recusa o arquivo inteiro (cabeçalho ausente, inválido ou repetido; layout não suportado; trailer ausente, inválido ou com contadores divergentes; NSR fora de sequência, inclusive lacuna; linha em branco no meio; registro depois do trailer; registro tipo 2/4/5 malformado; arquivo anterior ao cursor ou com lacuna depois dele; transição legada ambígua). Marcação individualmente inválida (data fora do calendário ou de 2000–2099, hora fora de 0000–2359, PIS não numérico ou zero, tamanho diferente de 34) é rejeitada e registrada por NSR e motivo. |
+| D5 | Layout 1510/2009 reconhecido pelo cabeçalho (tamanho e campos), pelos tamanhos dos tipos 2/4/5, pelo trailer e pelo tamanho das marcações (arquivo em que nenhuma marcação tem 34 posições é recusado como layout não suportado). Datas por `checkdate` (sem transbordo). CRLF e LF aceitos. |
+| D6 | Transição do controle legado (abaixo). `imported_lines` passa a ser somente leitura. |
+| D7 | Ajuste #73 não é tocado. |
+
+**Cursores (`afd_imports`).** `cursor_before`: maior NSR já examinado do REP antes da importação; `cursor_after` (= `afd_reps.processed_to_nsr`): maior NSR examinado ao fim; `max_nsr`: maior NSR do arquivo; `max_valid_punch_nsr`: maior NSR de marcação válida; `max_imported_nsr`: maior NSR efetivamente gravado por esta importação. Totais: `imported` (gravadas), `existing` (válidas acima do cursor que já existiam com o mesmo REP+NSR), `already_processed` (marcações com NSR ≤ cursor), `rejected`. Uma marcação rejeitada fica em `afd_import_rejections` (REP, NSR, motivo, importação — sem PIS, nome ou conteúdo da linha) e não é reprocessada por estar abaixo do cursor; ela nunca é contada como importada.
+
+**Transição do legado (primeira importação de um REP sem cursor).**
+- Outro REP já importado pelo novo mecanismo, ou nenhum `imported_lines` e nenhuma batida importada sem NSR: início do zero (cursor 0).
+- Batidas importadas sem NSR e sem `imported_lines`: ambíguo → recusado.
+- Com `imported_lines` (L = maior `line_number`): exige AFD completo a partir do NSR 1 (linha k = NSR k−1) e L ≤ linha do trailer. Cursor = L−2: a primeira marcação nova é o NSR L−1, a que o importador anterior perderia. Antes de aceitar, são conferidos no banco os 50 registros anteriores ao cursor que o importador anterior deveria ter gravado (exceto as posições já perdidas em fronteiras anteriores, L′−1 para cada `line_number` L′, e as 9 primeiras linhas), pela chave com que ele gravava (data, hora e posições 024-035); e que nenhum registro a partir do NSR L−1 já existe além do explicado por repetições no mesmo minuto. Qualquer ausência ou presença inesperada → recusado. A existência de uma batida com mesma data/hora/PIS é usada só como evidência da última importação, nunca para atribuir NSR a batidas antigas.
+
+**Transação, trava e idempotência.** Validação integral sem banco; depois uma transação: `insertOrIgnore` + `lockForUpdate` da linha do REP em `afd_reps` (trava de linha no MySQL, compartilhada entre processos), cursor/transição, registro da importação, `insertOrIgnore` das marcações em lotes de 1000 (a UNIQUE é a última proteção), rejeições, totais e cursor. Falha em qualquer ponto desfaz tudo. Reimportar o mesmo arquivo não grava nada; um AFD cumulativo posterior grava só os NSRs novos.
+
+**Arquivos.** C `app/Services/AfdParser.php`, `AfdImporter.php`, `AfdRecord.php`; C `app/Enums/AfdRecordType.php`, `AfdRejectionReason.php`; C `app/Models/AfdRep.php`, `AfdImport.php`, `AfdImportRejection.php` + factories; C 4 migrations `2026_10_20_2357*`; M `app/Livewire/EmployeeIndex.php` (delega ao importador; limite via `config('livewire.upload_max_filesize')`; resumo sem dados pessoais); C `tests/Unit/AfdParserTest.php`, `tests/Feature/AfdImporterTest.php`, `tests/Support/AfdFileBuilder.php` (AFD sintético); M `tests/Feature/EmployeeIndexTest.php`. Sem alteração: `Point`, consumidores de `points`, suggester, calculadora, workflow, Golden Dataset.
+
+**Limitações e pendências.**
+- Dados históricos **não foram saneados**: os 156 trailers, os registros dos tipos 2/4/5 gravados como batida e as marcações perdidas continuam como estavam. O saneamento é etapa separada, com backup, inventário, reconciliação por NSR com o AFD completo atual, lista auditável de ações, aprovação humana e procedimento de reversão; depois dele, revisar o ajuste #73 e os dias afetados nas competências abertas.
+- A primeira importação em produção depende da transição: se o AFD disponível for anterior à última importação legada ou a evidência não fechar, a importação é recusada e o ponto de partida precisa ser conferido manualmente.
+- Datas de marcação são aceitas entre 2000 e 2099; o relógio do REP com data futura válida ainda move o horizonte da F12 (S2-P7, abaixo).
+- Os registros tipo 5 (cadastro no REP) não são usados.
+- `INSERT IGNORE` no MySQL também transforma outros erros de inserção em avisos; os valores são validados antes, e a contagem `existing` revela inserções não feitas.
+- A reversão das migrations foi exercitada em SQLite; no MySQL ela não foi executada.
+
+**S2-P7 (pendente, separada).** Limitar o horizonte a `min(H, ontem)` protege contra data futura válida (relógio do REP errado); não resolve perdas nem registros indevidos, que a F13 corrige daqui em diante e o saneamento corrigirá no histórico. Deve ser decidida e implementada depois desta correção, idealmente calculando o horizonte só sobre batidas com NSR (validadas pela F13) após o saneamento. R33 não foi alterada.
+
 ---
 
 ## 13. Detailed File-Level Plan
@@ -1311,3 +1363,6 @@ Somente questões descobertas na análise que afetam a implementação. Nenhuma 
 13. **F12/S1** — Geração incremental de sugestões do ponto (implementada).
 14. **F12/S2** — Conflitos após correções no ponto e proteção de exclusão de batidas importadas (implementada).
 15. **F12/S3** — Compensação entre competências (implementada).
+16. **F13** — Importação AFD: layout 1510/2009, identidade REP + NSR, transição do controle legado (implementada).
+17. Saneamento histórico dos `points` importados (pendente, etapa própria).
+18. **S2-P7** — Horizonte limitado a `min(H, ontem)` (pendente, depois do saneamento).

@@ -1,6 +1,8 @@
 <?php
 
 use App\Livewire\EmployeeIndex;
+use App\Models\AfdImport;
+use App\Models\AfdRep;
 use App\Models\BenefitAdjustment;
 use App\Models\BenefitPeriodEmployee;
 use App\Models\Employee;
@@ -9,7 +11,9 @@ use App\Models\Point;
 use App\Models\TransportRoute;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Livewire\Livewire;
+use Tests\Support\AfdFileBuilder;
 
 uses(RefreshDatabase::class);
 
@@ -91,4 +95,49 @@ test('a terminated employee without benefit history can still be deleted', funct
     Livewire::test(EmployeeIndex::class)->call('destroy', $employee->id);
 
     $this->assertModelMissing($employee);
+});
+
+test('the import of an afd shows the totals and creates only the punches', function () {
+    $contents = AfdFileBuilder::make()
+        ->company()
+        ->employee('012345678901')
+        ->punch('012345678901', '15092026', '0812')
+        ->punch('012345678901', '15092026', '1730')
+        ->punch('012345678901', '31022026', '1800')
+        ->contents();
+
+    Livewire::test(EmployeeIndex::class)
+        ->set('file', UploadedFile::fake()->createWithContent('afd.txt', $contents))
+        ->call('importPoints')
+        ->assertDispatched('wireui:notification', function (string $name, array $params) {
+            $options = $params[0]['options'];
+            $description = $options['description'];
+
+            return $options['title'] === 'Importação Concluída'
+                && str_contains($description, '2 marcação(ões) importada(s); 0 já existente(s)')
+                && str_contains($description, '1 de empresa, 0 de ajuste do relógio e 1 de empregado')
+                && str_contains($description, '1 marcação(ões) inválida(s), não importada(s): NSR 5 (Data inválida)')
+                && str_contains($description, 'Processado até o NSR 5')
+                && ! str_contains($description, '12345678901');
+        });
+
+    expect(Point::query()->orderBy('nsr')->pluck('nsr')->all())->toBe([3, 4])
+        ->and(AfdImport::sole()->user_id)->toBe(auth()->id());
+});
+
+test('an invalid afd shows the error and writes nothing', function () {
+    $contents = AfdFileBuilder::make()
+        ->punch('012345678901', '15092026', '0812')
+        ->trailerCounts(['company' => 0, 'punch' => 2, 'clock_adjustment' => 0, 'employee' => 0])
+        ->contents();
+
+    Livewire::test(EmployeeIndex::class)
+        ->set('file', UploadedFile::fake()->createWithContent('afd.txt', $contents))
+        ->call('importPoints')
+        ->assertDispatched('wireui:notification', fn (string $name, array $params) => $params[0]['options']['title'] === 'Erro na Importação'
+            && str_contains($params[0]['options']['description'], 'contadores do trailer'));
+
+    expect(Point::count())->toBe(0)
+        ->and(AfdRep::count())->toBe(0)
+        ->and(AfdImport::count())->toBe(0);
 });

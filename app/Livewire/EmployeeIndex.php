@@ -2,10 +2,10 @@
 
 namespace App\Livewire;
 
+use App\Enums\AfdRejectionReason;
+use App\Models\AfdImport;
 use App\Models\Employee;
-use App\Models\ImportedLines;
-use App\Models\Point;
-use Carbon\Carbon;
+use App\Services\AfdImporter;
 use Livewire\Component;
 use Livewire\WithFileUploads;
 use Livewire\WithPagination;
@@ -59,15 +59,13 @@ class EmployeeIndex extends Component
         return redirect()->route('employees.horas-extras', ['employee' => $employee->id]);
     }
 
-    public function importPoints()
+    public function importPoints(AfdImporter $importer)
     {
         try {
             ini_set('memory_limit', '512M');
             $this->importing = true;
 
-            // pega o limite do .env (em MB) e converte para KB para a regra 'max:'
-            $maxMb = (int) env('LIVEWIRE_UPLOAD_MAX_FILESIZE', 50); // ex: 100
-            $maxKb = $maxMb * 1024;
+            $maxKb = (int) config('livewire.upload_max_filesize') * 1024;
 
             $this->validate([
                 'file' => 'required|file|mimetypes:text/plain|max:'.$maxKb,
@@ -77,68 +75,11 @@ class EmployeeIndex extends Component
                 return;
             }
 
-            $handle = fopen($this->file->path(), 'r');
-            $totalLines = ImportedLines::query()->orderBy('line_number', 'desc')->first();
-            $startLine = $totalLines ? $totalLines->line_number : 9;
-            $counter = 0;
-            $batch = [];
-            $batchSize = 1000; // processa 1000 registros por vez
-
-            // Pula as linhas já importadas
-            for ($i = 0; $i < $startLine; $i++) {
-                fgets($handle);
-            }
-
-            while (! feof($handle)) {
-                $line = fgets($handle);
-                if (empty($line)) {
-                    continue;
-                }
-
-                try {
-                    $data = substr($line, 10, 8);
-                    $hora = substr($line, 18, 4);
-                    $pis = substr($line, 23, 12);
-
-                    $dt = Carbon::createFromFormat('dmY', $data);
-                    $formattedDate = $dt->format('Y-m-d');
-                    $hora = substr($hora, 0, 2).':'.substr($hora, 2, 2).':00';
-
-                    $batch[] = [
-                        'date' => $formattedDate,
-                        'time' => trim($hora),
-                        'pis' => trim($pis),
-                        'type' => 'importado',
-                        'created_at' => now(),
-                        'updated_at' => now(),
-                    ];
-
-                    $counter++;
-
-                    // Insere em lotes para economizar memória
-                    if (count($batch) >= $batchSize) {
-                        Point::insert($batch);
-                        $batch = [];
-                    }
-                } catch (\Exception $e) {
-                    continue;
-                }
-            }
-
-            // Insere o último lote
-            if (! empty($batch)) {
-                Point::insert($batch);
-            }
-
-            fclose($handle);
-
-            ImportedLines::create([
-                'line_number' => $startLine + $counter,
-            ]);
+            $result = $importer->import($this->file->path(), auth()->id());
 
             $this->notification()->success(
                 $title = 'Importação Concluída',
-                $description = $counter.' novos pontos importados com sucesso.'
+                $description = $this->importSummary($result)
             );
 
         } catch (\Exception $e) {
@@ -150,6 +91,36 @@ class EmployeeIndex extends Component
             $this->importing = false;
             $this->file = null;
         }
+    }
+
+    /**
+     * Resumo da importação sem dados pessoais: totais, NSRs rejeitados e transição.
+     *
+     * @param  array<string, mixed>  $result
+     */
+    private function importSummary(array $result): string
+    {
+        $lines = [
+            $result['imported'].' marcação(ões) importada(s); '.$result['existing'].' já existente(s); '
+                .$result['already_processed'].' já processada(s) em importações anteriores.',
+            'Registros ignorados (não são marcações): '.$result['ignored']['company'].' de empresa, '
+                .$result['ignored']['clock_adjustment'].' de ajuste do relógio e '.$result['ignored']['employee'].' de empregado, além do cabeçalho e do trailer.',
+        ];
+
+        if ($result['rejected'] > 0) {
+            $nsrs = collect($result['rejections'])->take(20)
+                ->map(fn (array $rejection) => $rejection['nsr'].' ('.AfdRejectionReason::from($rejection['reason'])->label().')')
+                ->implode(', ');
+            $lines[] = $result['rejected'].' marcação(ões) inválida(s), não importada(s): NSR '.$nsrs.($result['rejected'] > 20 ? '…' : '').'.';
+        }
+
+        if ($result['transition'] === AfdImport::TRANSITION_LEGACY) {
+            $lines[] = 'Transição do controle legado: última importação anterior até a linha '.$result['legacy_line_number'].'; importação a partir do NSR '.($result['cursor_before'] + 1).'.';
+        }
+
+        $lines[] = 'Processado até o NSR '.$result['cursor_after'].'.';
+
+        return implode(' ', $lines);
     }
 
     public function render()
