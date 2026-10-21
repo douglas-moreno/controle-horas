@@ -6,9 +6,13 @@ use App\Enums\AfdRejectionReason;
 use App\Models\AfdImport;
 use App\Models\Employee;
 use App\Services\AfdImporter;
+use DomainException;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\ValidationException;
 use Livewire\Component;
 use Livewire\WithFileUploads;
 use Livewire\WithPagination;
+use Throwable;
 use WireUi\Traits\WireUiActions;
 
 class EmployeeIndex extends Component
@@ -82,10 +86,17 @@ class EmployeeIndex extends Component
                 $description = $this->importSummary($result)
             );
 
-        } catch (\Exception $e) {
+        } catch (DomainException|ValidationException $e) {
             $this->notification()->error(
                 $title = 'Erro na Importação',
                 $description = $e->getMessage()
+            );
+        } catch (Throwable $e) {
+            Log::error('Falha inesperada na importação do AFD.', ['exception' => $e::class]);
+
+            $this->notification()->error(
+                $title = 'Erro na Importação',
+                $description = AfdImporter::FAILURE_MESSAGE
             );
         } finally {
             $this->importing = false;
@@ -94,7 +105,8 @@ class EmployeeIndex extends Component
     }
 
     /**
-     * Resumo da importação sem dados pessoais: totais, NSRs rejeitados e transição.
+     * Resumo da importação sem dados pessoais: totais, coincidências com batidas manuais
+     * (contadas por batida manual), NSRs rejeitados e transição.
      *
      * @param  array<string, mixed>  $result
      */
@@ -103,6 +115,7 @@ class EmployeeIndex extends Component
         $lines = [
             $result['imported'].' marcação(ões) importada(s); '.$result['existing'].' já existente(s); '
                 .$result['already_processed'].' já processada(s) em importações anteriores.',
+            $result['manual_coincidences'].' batida(s) manual(is) com o mesmo PIS, data e minuto de uma marcação importada (verificar duplicidade no espelho).',
             'Registros ignorados (não são marcações): '.$result['ignored']['company'].' de empresa, '
                 .$result['ignored']['clock_adjustment'].' de ajuste do relógio e '.$result['ignored']['employee'].' de empregado, além do cabeçalho e do trailer.',
         ];

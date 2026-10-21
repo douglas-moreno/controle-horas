@@ -12,8 +12,12 @@ use App\Models\Point;
 use Carbon\CarbonImmutable;
 use DomainException;
 use Generator;
+use Illuminate\Database\QueryException;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use PDOException;
 
 /**
  * Importa um AFD (layout do AfdParser) para `points`, identificando cada marcação pelo
@@ -28,6 +32,14 @@ use Illuminate\Support\Facades\DB;
  *    gravação somente das marcações (tipo 3) válidas com NSR acima do cursor;
  *    marcações inválidas em `afd_import_rejections` (NSR e motivo); registro da
  *    importação e avanço do cursor. Qualquer falha desfaz tudo.
+ *
+ * Duplicidade é tratada explicitamente, sem INSERT IGNORE: antes de cada lote, os NSRs
+ * do REP já gravados (em `points` ou em `afd_import_rejections`) são consultados e
+ * contados como existentes; os demais são inseridos com INSERT comum. Uma violação de
+ * unicidade nesse INSERT significa gravação concorrente fora da trava e desfaz a
+ * importação inteira. Outras falhas de banco também desfazem tudo e viram uma mensagem
+ * genérica; o log técnico registra só a classe e os códigos de erro, nunca a mensagem
+ * do driver, o SQL ou os valores (que podem conter PIS).
  *
  * Os tipos 1, 2, 4, 5 e o trailer são contados e nunca geram batida.
  */
@@ -45,6 +57,10 @@ class AfdImporter
      */
     private const LEGACY_INITIAL_SKIP = 9;
 
+    public const FAILURE_MESSAGE = 'Não foi possível concluir a importação do AFD. Nenhuma alteração foi confirmada. Consulte os logs técnicos.';
+
+    public const CONCURRENCY_MESSAGE = 'Outra operação gravou marcações deste relógio durante a importação. Nenhuma alteração foi confirmada; repita a importação.';
+
     public function __construct(private AfdParser $parser) {}
 
     /**
@@ -52,6 +68,7 @@ class AfdImporter
      *     import_id: int, transition: ?string, legacy_line_number: ?int, cursor_before: int, cursor_after: int,
      *     max_nsr: ?int, max_valid_punch_nsr: ?int, max_imported_nsr: ?int,
      *     imported: int, existing: int, already_processed: int, rejected: int,
+     *     rejections_already_recorded: int, manual_coincidences: int,
      *     rejections: list<array{nsr: int, reason: string}>,
      *     ignored: array{header: int, company: int, clock_adjustment: int, employee: int, trailer: int}
      * }
@@ -62,7 +79,17 @@ class AfdImporter
     {
         $scan = $this->scan($path);
 
-        return DB::transaction(fn () => $this->persist($path, $scan, $userId));
+        try {
+            return DB::transaction(fn () => $this->persist($path, $scan, $userId));
+        } catch (QueryException|PDOException $exception) {
+            Log::error('Falha de banco na importação do AFD; nenhuma alteração foi confirmada.', [
+                'exception' => $exception::class,
+                'sqlstate' => $exception->errorInfo[0] ?? null,
+                'driver_code' => $exception->errorInfo[1] ?? null,
+            ]);
+
+            throw new DomainException(self::FAILURE_MESSAGE);
+        }
     }
 
     /**
@@ -184,8 +211,8 @@ class AfdImporter
      */
     private function persist(string $path, array $scan, ?int $userId): array
     {
-        AfdRep::query()->insertOrIgnore(['rep_serial' => $scan['rep_serial'], 'created_at' => now(), 'updated_at' => now()]);
-        $rep = AfdRep::query()->where('rep_serial', $scan['rep_serial'])->lockForUpdate()->firstOrFail();
+        $created = AfdRep::query()->createOrFirst(['rep_serial' => $scan['rep_serial']]);
+        $rep = AfdRep::query()->whereKey($created->id)->lockForUpdate()->firstOrFail();
 
         $start = $rep->processed_to_nsr !== null
             ? ['cursor' => $rep->processed_to_nsr, 'transition' => null, 'legacy_line_number' => null, 'legacy_checked' => 0, 'legacy_confirmed' => 0]
@@ -227,9 +254,10 @@ class AfdImporter
         $import->save();
 
         $totals = ['imported' => 0, 'existing' => 0, 'already_processed' => 0, 'rejected' => 0];
+        $rejectionsAlreadyRecorded = 0;
+        $manualCoincidences = [];
         $points = [];
         $rejections = [];
-        $validAbove = 0;
         $now = now();
 
         foreach ($this->lines($path) as $lineNumber => $line) {
@@ -256,7 +284,6 @@ class AfdImporter
                 continue;
             }
 
-            $validAbove++;
             $points[] = [
                 'pis' => (int) $record->pis,
                 'date' => $record->date->toDateString(),
@@ -270,19 +297,17 @@ class AfdImporter
             ];
 
             if (count($points) >= self::BATCH_SIZE) {
-                $totals['imported'] += Point::query()->insertOrIgnore($points);
+                $this->insertPoints($points, $rep, $totals, $manualCoincidences);
                 $points = [];
             }
         }
 
         if ($points !== []) {
-            $totals['imported'] += Point::query()->insertOrIgnore($points);
+            $this->insertPoints($points, $rep, $totals, $manualCoincidences);
         }
 
-        $totals['existing'] = $validAbove - $totals['imported'];
-
         foreach (array_chunk($rejections, self::BATCH_SIZE) as $chunk) {
-            AfdImportRejection::query()->insertOrIgnore($chunk);
+            $rejectionsAlreadyRecorded += $this->insertRejections($chunk, $rep);
         }
 
         $maxImportedNsr = Point::query()->where('afd_import_id', $import->id)->max('nsr');
@@ -305,6 +330,8 @@ class AfdImporter
             'max_valid_punch_nsr' => $scan['max_valid_punch_nsr'],
             'max_imported_nsr' => $import->max_imported_nsr,
             ...$totals,
+            'rejections_already_recorded' => $rejectionsAlreadyRecorded,
+            'manual_coincidences' => count($manualCoincidences),
             'rejections' => array_map(fn (array $row) => ['nsr' => $row['nsr'], 'reason' => $row['reason']], $rejections),
             'ignored' => [
                 'header' => 1,
@@ -314,6 +341,105 @@ class AfdImporter
                 'trailer' => 1,
             ],
         ];
+    }
+
+    /**
+     * Grava um lote de marcações. NSRs do REP já gravados são contados em `existing` e
+     * não são reenviados; os demais vão num INSERT comum. Também acumula, por id, as
+     * batidas manuais coincidentes (G1).
+     *
+     * @param  list<array<string, mixed>>  $rows
+     * @param  array{imported: int, existing: int, already_processed: int, rejected: int}  $totals
+     * @param  array<int, true>  $manualCoincidences
+     *
+     * @throws DomainException
+     */
+    private function insertPoints(array $rows, AfdRep $rep, array &$totals, array &$manualCoincidences): void
+    {
+        $stored = Point::query()->toBase()
+            ->where('rep_serial', $rep->rep_serial)
+            ->whereIn('nsr', array_column($rows, 'nsr'))
+            ->pluck('nsr')
+            ->map(fn ($nsr) => (int) $nsr)
+            ->flip();
+        $new = array_values(array_filter($rows, fn (array $row) => ! $stored->has($row['nsr'])));
+
+        $totals['existing'] += count($rows) - count($new);
+
+        if ($new === []) {
+            return;
+        }
+
+        foreach ($this->manualCoincidences($new) as $manualId) {
+            $manualCoincidences[$manualId] = true;
+        }
+
+        $this->insertWithoutDuplicates(fn () => Point::query()->insert($new));
+        $totals['imported'] += count($new);
+    }
+
+    /**
+     * Grava um lote de rejeições. NSRs do REP já registrados não são reenviados.
+     *
+     * @param  list<array<string, mixed>>  $rows
+     * @return int Rejeições que já estavam registradas.
+     *
+     * @throws DomainException
+     */
+    private function insertRejections(array $rows, AfdRep $rep): int
+    {
+        $recorded = AfdImportRejection::query()->toBase()
+            ->where('afd_rep_id', $rep->id)
+            ->whereIn('nsr', array_column($rows, 'nsr'))
+            ->pluck('nsr')
+            ->map(fn ($nsr) => (int) $nsr)
+            ->flip();
+        $new = array_values(array_filter($rows, fn (array $row) => ! $recorded->has($row['nsr'])));
+
+        if ($new !== []) {
+            $this->insertWithoutDuplicates(fn () => AfdImportRejection::query()->insert($new));
+        }
+
+        return count($rows) - count($new);
+    }
+
+    /**
+     * Executa um INSERT comum. Violação de unicidade depois da consulta prévia indica
+     * gravação concorrente: a importação é desfeita com mensagem própria. Qualquer
+     * outra falha é repassada (e desfeita pela transação).
+     *
+     * @throws DomainException
+     */
+    private function insertWithoutDuplicates(callable $insert): void
+    {
+        try {
+            $insert();
+        } catch (UniqueConstraintViolationException) {
+            throw new DomainException(self::CONCURRENCY_MESSAGE);
+        }
+    }
+
+    /**
+     * G1: ids das batidas manuais com o mesmo PIS, data e minuto de alguma marcação do
+     * lote. A unidade é a batida manual: cada uma conta uma vez, mesmo que coincida com
+     * várias marcações. Somente leitura; nada é alterado.
+     *
+     * @param  list<array<string, mixed>>  $rows
+     * @return list<int>
+     */
+    private function manualCoincidences(array $rows): array
+    {
+        $keys = collect($rows)->mapWithKeys(fn (array $row) => [$this->legacyKey($row['date'], $row['time'], (string) $row['pis']) => true]);
+
+        return Point::query()->toBase()
+            ->where('type', 'manual')
+            ->whereIn('pis', collect($rows)->pluck('pis')->unique()->values())
+            ->where(fn ($query) => collect($rows)->pluck('date')->unique()->each(fn (string $date) => $query->orWhereDate('date', $date)))
+            ->get(['id', 'date', 'time', 'pis'])
+            ->filter(fn (object $point) => $keys->has($this->legacyKey((string) $point->date, (string) $point->time, (string) $point->pis)))
+            ->map(fn (object $point) => (int) $point->id)
+            ->values()
+            ->all();
     }
 
     /**
@@ -439,20 +565,20 @@ class AfdImporter
      */
     private function existingLegacyKeys(Collection $keys): array
     {
-        $dates = $keys->map(fn (string $key) => explode('|', $key)[0])->sort()->values();
+        $parts = $keys->map(fn (string $key) => explode('|', $key));
         $wanted = $keys->flip();
         $counts = [];
 
-        if ($dates->isEmpty()) {
+        if ($parts->isEmpty()) {
             return [];
         }
 
-        Point::query()->where('type', 'importado')->whereNull('nsr')
-            ->whereDate('date', '>=', $dates->first())
-            ->whereDate('date', '<=', $dates->last())
+        Point::query()->toBase()->where('type', 'importado')->whereNull('nsr')
+            ->whereIn('pis', $parts->map(fn (array $part) => (int) $part[2])->unique()->values())
+            ->where(fn ($query) => $parts->pluck(0)->unique()->each(fn (string $date) => $query->orWhereDate('date', $date)))
             ->get(['date', 'time', 'pis'])
-            ->each(function (Point $point) use ($wanted, &$counts) {
-                $key = $this->legacyKey($point->getRawOriginal('date'), (string) $point->getRawOriginal('time'), (string) $point->getRawOriginal('pis'));
+            ->each(function (object $point) use ($wanted, &$counts) {
+                $key = $this->legacyKey((string) $point->date, (string) $point->time, (string) $point->pis);
 
                 if ($wanted->has($key)) {
                     $counts[$key] = ($counts[$key] ?? 0) + 1;

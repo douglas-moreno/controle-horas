@@ -9,8 +9,11 @@ use App\Models\ImportedLines;
 use App\Models\Point;
 use App\Services\AfdImporter;
 use Carbon\Carbon;
+use Illuminate\Database\Events\QueryExecuted;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Tests\Support\AfdFileBuilder;
 
@@ -336,6 +339,167 @@ describe('cursors and rejections', function () {
     });
 });
 
+describe('duplicates and database failures', function () {
+    beforeEach(function () {
+        /**
+         * Executa $action uma única vez, logo depois da primeira consulta que satisfaz
+         * $matches (dentro da transação da importação).
+         */
+        $this->afterQuery = function (Closure $matches, Closure $action): void {
+            $done = false;
+            DB::listen(function (QueryExecuted $query) use (&$done, $matches, $action) {
+                if (! $done && $matches(strtolower($query->sql))) {
+                    $done = true;
+                    $action();
+                }
+            });
+        };
+        $this->isPrecheckOf = fn (string $table, string $column) => fn (string $sql) => str_starts_with(ltrim($sql), 'select')
+            && (bool) preg_match('/from [`"]'.$table.'[`"] where [`"]'.$column.'[`"]/', $sql);
+        $this->safeFailure = function (Closure $import, string $expectedMessage): void {
+            try {
+                $import();
+                $this->fail('A importação deveria falhar.');
+            } catch (DomainException $exception) {
+                expect($exception->getMessage())->toBe($expectedMessage)
+                    ->and($exception->getMessage())->not->toContain(ltrim(AFD_PIS_A, '0'))
+                    ->and(strtolower($exception->getMessage()))->not->toContain('insert')
+                    ->and($exception->getMessage())->not->toContain('SQLSTATE');
+            }
+        };
+    });
+
+    test('a nsr already stored for the rep is counted as existing and is not sent again', function () {
+        DB::table('points')->insert(['pis' => 12345678901, 'date' => '2026-09-06', 'time' => '08:05:00', 'type' => 'importado', 'rep_serial' => AfdFileBuilder::REP_SERIAL, 'nsr' => 5, 'created_at' => now(), 'updated_at' => now()]);
+        $insertedNsrs = [];
+        DB::listen(function (QueryExecuted $query) use (&$insertedNsrs) {
+            if (preg_match('/^insert into [`"]points[`"] \(([^)]*)\)/i', $query->sql, $match)) {
+                $columns = array_map(fn (string $column) => trim($column, ' `"'), explode(',', $match[1]));
+
+                foreach (array_chunk($query->bindings, count($columns)) as $row) {
+                    $insertedNsrs[] = $row[array_search('nsr', $columns, true)];
+                }
+            }
+        });
+
+        $result = $this->importer->import(($this->afd)(3)->write());
+
+        expect($result)->toMatchArray(['imported' => 2, 'existing' => 1])
+            ->and($insertedNsrs)->toBe([3, 4])
+            ->and(Point::query()->where('nsr', 5)->count())->toBe(1);
+    });
+
+    test('a database failure that is not a duplicate while inserting points rolls everything back with a safe message', function () {
+        Log::spy();
+        ($this->afterQuery)(($this->isPrecheckOf)('points', 'rep_serial'), fn () => DB::table('afd_imports')->delete());
+
+        ($this->safeFailure)(fn () => $this->importer->import(($this->afd)(3)->write()), AfdImporter::FAILURE_MESSAGE);
+
+        ($this->nothingPersisted)();
+        Log::shouldHaveReceived('error')->once()->withArgs(fn (string $message, array $context) => array_keys($context) === ['exception', 'sqlstate', 'driver_code']
+            && $context['exception'] === QueryException::class
+            && ! str_contains(json_encode($context), ltrim(AFD_PIS_A, '0')));
+    });
+
+    test('a database failure that is not a duplicate while recording rejections rolls everything back', function () {
+        ($this->afterQuery)(($this->isPrecheckOf)('afd_import_rejections', 'afd_rep_id'), fn () => DB::table('afd_imports')->delete());
+
+        ($this->safeFailure)(fn () => $this->importer->import(($this->afd)(2)->punch(AFD_PIS_A, '31022026', '0812')->write()), AfdImporter::FAILURE_MESSAGE);
+
+        ($this->nothingPersisted)();
+    });
+
+    test('a punch written by another operation between the check and the insert rolls everything back as a concurrency failure', function () {
+        ($this->afterQuery)(($this->isPrecheckOf)('points', 'rep_serial'), fn () => DB::table('points')->insert([
+            'pis' => 12345678901, 'date' => '2026-09-04', 'time' => '08:03:00', 'type' => 'importado',
+            'rep_serial' => AfdFileBuilder::REP_SERIAL, 'nsr' => 3, 'created_at' => now(), 'updated_at' => now(),
+        ]));
+
+        ($this->safeFailure)(fn () => $this->importer->import(($this->afd)(3)->write()), AfdImporter::CONCURRENCY_MESSAGE);
+
+        ($this->nothingPersisted)();
+    });
+
+    test('a rejection written by another operation between the check and the insert rolls everything back as a concurrency failure', function () {
+        ($this->afterQuery)(($this->isPrecheckOf)('afd_import_rejections', 'afd_rep_id'), function () {
+            $import = AfdImport::query()->sole();
+            DB::table('afd_import_rejections')->insert(['afd_import_id' => $import->id, 'afd_rep_id' => $import->afd_rep_id, 'nsr' => 5, 'reason' => 'invalid_date', 'created_at' => now()]);
+        });
+
+        ($this->safeFailure)(fn () => $this->importer->import(($this->afd)(2)->punch(AFD_PIS_A, '31022026', '0812')->write()), AfdImporter::CONCURRENCY_MESSAGE);
+
+        ($this->nothingPersisted)();
+    });
+
+    test('a rejection already recorded for the rep is counted and not duplicated', function () {
+        $rep = AfdRep::factory()->create(['rep_serial' => AfdFileBuilder::REP_SERIAL]);
+        $previous = AfdImport::factory()->for($rep, 'rep')->create();
+        AfdImportRejection::factory()->for($previous)->create(['afd_rep_id' => $rep->id, 'nsr' => 5, 'reason' => AfdRejectionReason::InvalidDate]);
+
+        $result = $this->importer->import(($this->afd)(2)->punch(AFD_PIS_A, '31022026', '0812')->write());
+
+        expect($result)->toMatchArray(['imported' => 2, 'rejected' => 1, 'rejections_already_recorded' => 1])
+            ->and(AfdImportRejection::query()->where('nsr', 5)->count())->toBe(1)
+            ->and(AfdImportRejection::query()->where('nsr', 5)->value('afd_import_id'))->toBe($previous->id);
+    });
+
+    test('a rep created by another operation is reused and never duplicated', function () {
+        AfdRep::factory()->create(['rep_serial' => AfdFileBuilder::REP_SERIAL]);
+
+        $this->importer->import(($this->afd)(2)->write());
+
+        expect(AfdRep::count())->toBe(1)
+            ->and(AfdRep::sole()->processed_to_nsr)->toBe(4);
+    });
+
+    test('a failure while creating the rep that is not a duplicate is not hidden', function () {
+        ($this->afterQuery)(fn (string $sql) => str_starts_with($sql, 'insert into') && str_contains($sql, 'afd_reps'), function () {
+            throw new QueryException(DB::getDefaultConnection(), 'insert into afd_reps', [], new PDOException('falha simulada'));
+        });
+
+        ($this->safeFailure)(fn () => $this->importer->import(($this->afd)(2)->write()), AfdImporter::FAILURE_MESSAGE);
+
+        ($this->nothingPersisted)();
+    });
+});
+
+describe('manual coincidences', function () {
+    test('a manual punch with the same pis, date and minute as an imported punch is reported without blocking the import', function () {
+        $manual = Point::factory()->manual()->create(['pis' => 12345678901, 'date' => '2026-09-15', 'time' => '08:12:00']);
+        Point::factory()->manual()->create(['pis' => 12345678901, 'date' => '2026-09-15', 'time' => '12:00:00']);
+        Point::factory()->manual()->create(['pis' => 10987654321, 'date' => '2026-09-15', 'time' => '08:12:00']);
+        $manualBefore = DB::table('points')->where('type', 'manual')->orderBy('id')->get()->toArray();
+
+        $result = $this->importer->import(AfdFileBuilder::make()
+            ->punch(AFD_PIS_A, '15092026', '0812')
+            ->punch(AFD_PIS_A, '15092026', '0812')
+            ->punch(AFD_PIS_A, '15092026', '0813')
+            ->punch(AFD_PIS_A, '16092026', '0812')
+            ->write());
+
+        expect($result)->toMatchArray(['imported' => 4, 'manual_coincidences' => 1])
+            ->and(DB::table('points')->where('type', 'manual')->orderBy('id')->get()->toArray())->toEqual($manualBefore)
+            ->and(Point::query()->where('type', 'importado')->count())->toBe(4)
+            ->and($manual->fresh())->not->toBeNull();
+    });
+
+    test('each coinciding manual punch counts once', function () {
+        Point::factory()->manual()->count(2)->create(['pis' => 12345678901, 'date' => '2026-09-15', 'time' => '08:12:00']);
+
+        $result = $this->importer->import(AfdFileBuilder::make()->punch(AFD_PIS_A, '15092026', '0812')->write());
+
+        expect($result['manual_coincidences'])->toBe(2);
+    });
+
+    test('a punch already processed is not compared again with manual punches', function () {
+        $path = AfdFileBuilder::make()->punch(AFD_PIS_A, '15092026', '0812')->write();
+        $this->importer->import($path);
+        Point::factory()->manual()->create(['pis' => 12345678901, 'date' => '2026-09-15', 'time' => '08:12:00']);
+
+        expect($this->importer->import($path)['manual_coincidences'])->toBe(0);
+    });
+});
+
 describe('structural refusals', function () {
     test('a structurally invalid file is refused without writing anything', function (Closure $lines, string $message) {
         $builder = ($this->afd)(3);
@@ -494,6 +658,50 @@ describe('legacy transition', function () {
 
         expect(AfdRep::count())->toBe(0);
     });
+
+    test('the legacy evidence reads only the exact dates and the pis it needs, without hydrating models', function () {
+        $first = ($this->afd)(15, AfdFileBuilder::make()->clockAdjustment('010120100800', '010120100805'));
+        ($this->legacyImport)($first->write());
+        DB::table('points')->insert(collect(range(1, 30))->map(fn (int $day) => ['pis' => 99999999999, 'date' => sprintf('2025-06-%02d', $day), 'time' => '08:00:00', 'type' => 'importado', 'created_at' => now(), 'updated_at' => now()])->all());
+        $evidence = [];
+        DB::listen(function (QueryExecuted $query) use (&$evidence) {
+            if (str_contains(strtolower($query->sql), 'type') && str_contains(strtolower($query->sql), 'nsr') && str_contains(strtolower($query->sql), 'is null') && str_starts_with(strtolower(ltrim($query->sql)), 'select')) {
+                $evidence[] = $query;
+            }
+        });
+
+        $result = $this->importer->import(($this->afd)(2, $first)->write());
+        $query = collect($evidence)->last();
+
+        expect($result)->toMatchArray(['transition' => AfdImport::TRANSITION_LEGACY, 'cursor_before' => 16, 'imported' => 2])
+            ->and(strtolower($query->sql))->not->toContain('>=')
+            ->and(strtolower($query->sql))->not->toContain('<=')
+            ->and($query->bindings)->not->toContain('2025-06-15')
+            ->and($query->bindings)->not->toContain(99999999999);
+    });
+
+    test('the transition decisions are unchanged by the evidence query', function (Closure $tamper, ?string $refusal) {
+        $first = ($this->afd)(15, AfdFileBuilder::make());
+        ($this->legacyImport)($first->write());
+        $tamper();
+
+        $import = fn () => $this->importer->import(($this->afd)(2, $first)->write());
+
+        if ($refusal === null) {
+            expect($import()['cursor_before'])->toBe(15);
+        } else {
+            expect($import)->toThrow(DomainException::class, $refusal);
+        }
+    })->with([
+        'complete evidence' => [fn () => null, null],
+        'a legacy punch missing' => [fn () => DB::table('points')->where('id', DB::table('points')->max('id'))->delete(), 'registros anteriores ao NSR 16 não foram encontrados'],
+        'a new record already present' => [fn () => DB::table('points')->insert(['pis' => 12345678901, 'date' => '2026-09-17', 'time' => '08:16:00', 'type' => 'importado', 'created_at' => now(), 'updated_at' => now()]), 'parecem já existir'],
+        'a manual punch equal to a missing legacy punch does not count as evidence' => [function () {
+            $last = DB::table('points')->orderByDesc('id')->first();
+            DB::table('points')->where('id', $last->id)->delete();
+            DB::table('points')->insert(['pis' => $last->pis, 'date' => $last->date, 'time' => $last->time, 'type' => 'manual', 'created_at' => now(), 'updated_at' => now()]);
+        }, 'não foram encontrados'],
+    ]);
 
     test('after the transition the legacy history is no longer used', function () {
         $first = ($this->afd)(15, AfdFileBuilder::make());

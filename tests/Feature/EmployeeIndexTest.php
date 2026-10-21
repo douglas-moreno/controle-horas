@@ -10,8 +10,11 @@ use App\Models\EmployeeBenefit;
 use App\Models\Point;
 use App\Models\TransportRoute;
 use App\Models\User;
+use App\Services\AfdImporter;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Log;
 use Livewire\Livewire;
 use Tests\Support\AfdFileBuilder;
 
@@ -141,3 +144,18 @@ test('an invalid afd shows the error and writes nothing', function () {
         ->and(AfdRep::count())->toBe(0)
         ->and(AfdImport::count())->toBe(0);
 });
+
+test('an unexpected failure shows a generic message without sql, bindings or pis', function (Throwable $failure) {
+    $this->mock(AfdImporter::class)->shouldReceive('import')->andThrow($failure);
+    Log::spy();
+
+    Livewire::test(EmployeeIndex::class)
+        ->set('file', UploadedFile::fake()->createWithContent('afd.txt', AfdFileBuilder::make()->contents()))
+        ->call('importPoints')
+        ->assertDispatched('wireui:notification', fn (string $name, array $params) => $params[0]['options']['description'] === AfdImporter::FAILURE_MESSAGE);
+
+    Log::shouldHaveReceived('error')->once()->withArgs(fn (string $message, array $context) => $context === ['exception' => $failure::class]);
+})->with([
+    'database error with bindings' => fn () => new QueryException('mysql', 'insert into points (pis) values (?)', [12345678901], new PDOException('SQLSTATE[23000]: valor 12345678901')),
+    'runtime error' => fn () => new RuntimeException('/var/www/html/storage/app/private/livewire-tmp/arquivo.txt 12345678901'),
+]);
