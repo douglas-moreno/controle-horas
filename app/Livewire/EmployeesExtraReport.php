@@ -4,7 +4,11 @@ namespace App\Livewire;
 
 use App\Models\Employee;
 use App\Models\Holiday;
+use App\Models\Point;
+use App\Services\OvertimeCalculator;
+use App\Services\TimesheetMirror;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Livewire\Component;
 use WireUi\Traits\WireUiActions;
 
@@ -95,37 +99,7 @@ class EmployeesExtraReport extends Component
             $holidayMinutes = 0;
 
             foreach ($groups as $date => $points) {
-                $times = collect($points)->sortBy('time')->pluck('time')->values();
-                $count = $times->count();
-
-                $fmt = fn ($v) => empty($v) ? '' : Carbon::parse($v)->format('H:i');
-
-                $entrada = '';
-                $almoco_inicio = '';
-                $almoco_fim = '';
-                $saida = '';
-
-                // Mapeia os pontos conforme a contagem
-                if ($count === 1) {
-                    $entrada = $fmt($times->get(0));
-                } elseif ($count === 2) {
-                    // Primeiro -> Entrada, Segundo -> Saída (pula almoço)
-                    $entrada = $fmt($times->get(0));
-                    $saida = $fmt($times->get(1));
-                } elseif ($count === 3) {
-                    // Entrada, Almoço Início, Saída
-                    $entrada = $fmt($times->get(0));
-                    $almoco_inicio = $fmt($times->get(1));
-                    $saida = $fmt($times->get(2));
-                } elseif ($count >= 4) {
-                    // Entrada, Almoço Início, Almoço Fim, Saída (apenas os primeiros 4)
-                    $entrada = $fmt($times->get(0));
-                    $almoco_inicio = $fmt($times->get(1));
-                    $almoco_fim = $fmt($times->get(2));
-                    $saida = $fmt($times->get(3));
-                }
-
-                $extra = $this->calculateExtraMinutes($entrada, $almoco_inicio, $almoco_fim, $saida, $points);
+                $extra = $this->calculateExtraMinutes($date, $points);
                 $totalMinutes += $extra;
 
                 if (Holiday::isHoliday($date)) {
@@ -149,62 +123,16 @@ class EmployeesExtraReport extends Component
         $this->results = $results;
     }
 
-    // reuse da lógica anterior para minutos extras por dia
-    private function calculateExtraMinutes($entrada, $almocoInicio, $almocoFim, $saida, $points): int
+    /**
+     * Minutos extras do dia pela regra vigente compartilhada (OvertimeCalculator).
+     *
+     * @param  Collection<int, Point>  $points
+     */
+    private function calculateExtraMinutes(string $date, Collection $points): int
     {
-        if (empty($entrada) || empty($saida)) {
-            return 0;
-        }
-
         try {
-            $date = Carbon::parse($points->first()->date);
-
-            // Feriado segue a mesma regra do fim de semana: toda hora trabalhada é extra
-            $isFullOvertimeDay = $date->isWeekend() || Holiday::isHoliday($date);
-
-            $start = Carbon::parse($date->format('Y-m-d').' '.$entrada);
-            $end = Carbon::parse($date->format('Y-m-d').' '.$saida);
-            if ($end < $start) {
-                $end->addDay();
-            }
-
-            $total = $start->diffInMinutes($end);
-
-            if ($isFullOvertimeDay) {
-                if (! empty($almocoInicio) && ! empty($almocoFim)) {
-                    $almocoStart = Carbon::parse($date->format('Y-m-d').' '.$almocoInicio);
-                    $almocoEnd = Carbon::parse($date->format('Y-m-d').' '.$almocoFim);
-                    if ($almocoEnd < $almocoStart) {
-                        $almocoEnd->addDay();
-                    }
-                    $total -= $almocoStart->diffInMinutes($almocoEnd);
-                } elseif ($total > 360) {
-                    $total -= 60;
-                }
-
-                return max(0, (int) $total);
-            }
-
-            if (! empty($almocoInicio) && ! empty($almocoFim)) {
-                $almocoStart = Carbon::parse($date->format('Y-m-d').' '.$almocoInicio);
-                $almocoEnd = Carbon::parse($date->format('Y-m-d').' '.$almocoFim);
-                if ($almocoEnd < $almocoStart) {
-                    $almocoEnd->addDay();
-                }
-                $total -= $almocoStart->diffInMinutes($almocoEnd);
-            } elseif ($total > 360) {
-                $total -= 60;
-            }
-
-            if ($date->isFriday()) {
-                $extraMinutes = max(0, $total - 480); // 8h
-            } else {
-                $extraMinutes = max(0, $total - 540); // 9h
-            }
-
-            return max(0, (int) $extraMinutes);
+            return app(OvertimeCalculator::class)->minutes(Carbon::parse($date), app(TimesheetMirror::class)->distribute($points));
         } catch (\Exception $e) {
-            // \Log::error("Error calculating extra minutes (report): " . $e->getMessage());
             $this->notification()->error(
                 $title = 'Erro ao Calcular Minutos Extras',
                 $description = 'Ocorreu um erro ao calcular os minutos extras: '.$e->getMessage()
@@ -216,13 +144,7 @@ class EmployeesExtraReport extends Component
 
     private function minutesToTime(int $minutes): string
     {
-        if ($minutes <= 0) {
-            return '00:00';
-        }
-        $hours = floor($minutes / 60);
-        $mins = $minutes % 60;
-
-        return sprintf('%02d:%02d', $hours, $mins);
+        return OvertimeCalculator::format($minutes);
     }
 
     public function render()

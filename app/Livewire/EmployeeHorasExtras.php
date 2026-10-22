@@ -3,9 +3,9 @@
 namespace App\Livewire;
 
 use App\Models\Employee;
-use App\Models\Holiday;
+use App\Services\OvertimeCalculator;
+use App\Services\TimesheetMirror;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Collection;
 use Livewire\Attributes\Url;
 use Livewire\Component;
 use WireUi\Traits\WireUiActions;
@@ -16,7 +16,12 @@ class EmployeeHorasExtras extends Component
 
     public $employee;
 
-    public $groups;
+    /**
+     * Dias do espelho do período, montados pelo TimesheetMirror (mesmos dados da impressão).
+     *
+     * @var list<array<string, mixed>>
+     */
+    public array $days = [];
 
     public $mes;
 
@@ -41,6 +46,12 @@ class EmployeeHorasExtras extends Component
     public $totalHolidayHours = '00:00';
 
     public $totalExtraHours = '00:00';
+
+    public int $totalDelayMinutes = 0;
+
+    public string $totalDelayHours = '00:00';
+
+    public int $reviewDays = 0;
 
     #[Url()]
     public $startDate;
@@ -74,9 +85,7 @@ class EmployeeHorasExtras extends Component
 
     public function mount($employee)
     {
-        $this->employee = Employee::where('id', $employee)
-            ->with('points')
-            ->firstOrFail();
+        $this->employee = Employee::query()->findOrFail($employee);
 
         // Pegar o mês e ano atuais
         $this->mes = now()->month;
@@ -90,14 +99,30 @@ class EmployeeHorasExtras extends Component
             $this->endDate = Carbon::create($this->ano, $this->mes, 25)->format('Y-m-d');
         }
 
-        $this->groups = $this->getGroupedPoints();
-        $this->computeTotalExtra();
+        $this->updatePoints();
     }
 
     public function updatePoints()
     {
-        $this->groups = $this->getGroupedPoints();
-        $this->computeTotalExtra();
+        $start = $this->parseDate($this->startDate);
+        $end = $this->parseDate($this->endDate);
+
+        if ($start === null || $end === null) {
+            $this->days = [];
+            $this->applyTotals(app(TimesheetMirror::class)->build(collect(), now(), now()->subDay())['totals']);
+
+            return;
+        }
+
+        $mirror = app(TimesheetMirror::class)->forEmployee($this->employee, $start, $end);
+
+        $this->days = array_map(fn (array $day) => [
+            ...$day,
+            'day_type' => $day['day_type']->value,
+            'status' => $day['status']->value,
+        ], $mirror['days']);
+
+        $this->applyTotals($mirror['totals']);
     }
 
     // Atualiza automaticamente quando startDate ou endDate mudarem
@@ -108,235 +133,50 @@ class EmployeeHorasExtras extends Component
         }
     }
 
-    private function getGroupedPoints(): Collection
+    /**
+     * @param  array<string, mixed>  $totals
+     */
+    private function applyTotals(array $totals): void
     {
-        // Usa a coleção já carregada para evitar problemas de formato/consulta
-        $points = collect($this->employee->points ?? []);
+        $this->totalWeekdayMinutes = $totals['business_day_overtime_minutes'];
+        $this->totalSaturdayMinutes = $totals['saturday_overtime_minutes'];
+        $this->totalSundayMinutes = $totals['sunday_overtime_minutes'];
+        $this->totalHolidayMinutes = $totals['holiday_overtime_minutes'];
+        $this->totalExtraMinutes = $totals['overtime_minutes'];
 
-        // Filtra por intervalo de datas utilizando Carbon (robusto para vários formatos)
-        if ($this->startDate) {
-            try {
-                $start = Carbon::createFromFormat('Y-m-d', $this->startDate)->startOfDay();
-                $points = $points->filter(fn ($p) => Carbon::parse($p->date)->gte($start));
-            } catch (\Throwable $e) {
-                // Se a data estiver em outro formato, tenta parse genérico
-                $start = Carbon::parse($this->startDate)->startOfDay();
-                $points = $points->filter(fn ($p) => Carbon::parse($p->date)->gte($start));
-            }
-        }
+        $this->totalWeekdayHours = OvertimeCalculator::format($this->totalWeekdayMinutes);
+        $this->totalSaturdayHours = OvertimeCalculator::format($this->totalSaturdayMinutes);
+        $this->totalSundayHours = OvertimeCalculator::format($this->totalSundayMinutes);
+        $this->totalHolidayHours = OvertimeCalculator::format($this->totalHolidayMinutes);
+        $this->totalExtraHours = $totals['overtime'];
 
-        if ($this->endDate) {
-            try {
-                $end = Carbon::createFromFormat('Y-m-d', $this->endDate)->endOfDay();
-                $points = $points->filter(fn ($p) => Carbon::parse($p->date)->lte($end));
-            } catch (\Throwable $e) {
-                $end = Carbon::parse($this->endDate)->endOfDay();
-                $points = $points->filter(fn ($p) => Carbon::parse($p->date)->lte($end));
-            }
-        }
-
-        // Ordena e agrupa por data (Y-m-d)
-        $points = $points->sortBy(function ($p) {
-            return Carbon::parse($p->date)->format('Y-m-d').' '.($p->time ?? '');
-        });
-
-        return $points->groupBy(function ($p) {
-            return Carbon::parse($p->date)->format('Y-m-d');
-        })->sortKeys();
+        $this->totalDelayMinutes = $totals['delay_minutes'];
+        $this->totalDelayHours = $totals['delay'];
+        $this->reviewDays = $totals['review_days'];
     }
 
-    private function formatTimeValues($points): array
+    /**
+     * Aceita Y-m-d e, como fallback, outros formatos que o seletor de datas possa enviar.
+     */
+    private function parseDate(mixed $value): ?Carbon
     {
-        $times = collect($points)
-            ->sortBy('time')
-            ->pluck('time')
-            ->values();
-
-        $count = $times->count();
-
-        // Helper para formatar hora (retorna '' se vazio)
-        $fmt = function ($value) {
-            if (empty($value)) {
-                return '';
-            }
-            try {
-                return Carbon::parse($value)->format('H:i');
-            } catch (\Throwable $e) {
-                return (string) $value;
-            }
-        };
-
-        $entrada = '';
-        $almoco_inicio = '';
-        $almoco_fim = '';
-        $saida = '';
-
-        if ($count === 1) {
-            $entrada = $fmt($times->get(0));
-        } elseif ($count === 2) {
-            // Primeiro -> Entrada, Segundo -> Saída (pula almoço)
-            $entrada = $fmt($times->get(0));
-            $saida = $fmt($times->get(1));
-        } elseif ($count === 3) {
-            // Entrada, Almoço Início, Saída
-            $entrada = $fmt($times->get(0));
-            $almoco_inicio = $fmt($times->get(1));
-            $saida = $fmt($times->get(2));
-        } elseif ($count >= 4) {
-            // Entrada, Almoço Início, Almoço Fim, Saída (apenas os primeiros 4)
-            $entrada = $fmt($times->get(0));
-            $almoco_inicio = $fmt($times->get(1));
-            $almoco_fim = $fmt($times->get(2));
-            $saida = $fmt($times->get(3));
-        }
-
-        // calcula minutos extras para este dia
-        $extraMinutes = $this->calculateExtraMinutes($entrada, $almoco_inicio, $almoco_fim, $saida, $points);
-
-        $result = [
-            'entrada' => $entrada,
-            'almoco_inicio' => $almoco_inicio,
-            'almoco_fim' => $almoco_fim,
-            'saida' => $saida,
-            'hora_extra_minutes' => $extraMinutes,
-            'hora_extra' => $this->minutesToTime($extraMinutes),
-        ];
-
-        return $result;
-    }
-
-    // Novo: retorna minutos extras (inteiro) para um dia
-    private function calculateExtraMinutes($entrada, $almocoInicio, $almocoFim, $saida, $points): int
-    {
-        if (empty($entrada) || empty($saida)) {
-            return 0;
+        if (empty($value)) {
+            return null;
         }
 
         try {
-            $date = Carbon::parse($points->first()->date);
-
-            // Feriado segue a mesma regra do fim de semana: toda hora trabalhada é extra
-            $isFullOvertimeDay = $date->isWeekend() || Holiday::isHoliday($date);
-
-            // Constrói Carbon com data para evitar problemas de comparação
-            $start = Carbon::parse($date->format('Y-m-d').' '.$entrada);
-            $end = Carbon::parse($date->format('Y-m-d').' '.$saida);
-            if ($end < $start) {
-                $end->addDay();
-            }
-
-            $total = $start->diffInMinutes($end);
-
-            // Final de semana/feriado: soma tudo e subtrai 1h se passou de 6h (regra do usuário)
-            if ($isFullOvertimeDay) {
-                // Se houver marcação de almoço, desconta o intervalo informado
-                if (! empty($almocoInicio) && ! empty($almocoFim)) {
-                    $almocoStart = Carbon::parse($date->format('Y-m-d').' '.$almocoInicio);
-                    $almocoEnd = Carbon::parse($date->format('Y-m-d').' '.$almocoFim);
-                    if ($almocoEnd < $almocoStart) {
-                        $almocoEnd->addDay();
-                    }
-                    $lunchMinutes = $almocoStart->diffInMinutes($almocoEnd);
-                    $total -= $lunchMinutes;
-                } elseif ($total > 360) {
-                    // sem marcação de almoço mas passou de 6h -> subtrai 1h padrão
-                    $total -= 60;
-                }
-
-                return max(0, $total);
-            }
-
-            // Dias úteis: desconta almoço se marcado
-            if (! empty($almocoInicio) && ! empty($almocoFim)) {
-                $almocoStart = Carbon::parse($date->format('Y-m-d').' '.$almocoInicio);
-                $almocoEnd = Carbon::parse($date->format('Y-m-d').' '.$almocoFim);
-                if ($almocoEnd < $almocoStart) {
-                    $almocoEnd->addDay();
-                }
-                $almocoTime = $almocoStart->diffInMinutes($almocoEnd);
-                $total -= $almocoTime;
-            } elseif ($total > 360) {
-                // sem marcação de almoço mas passou de 6h -> subtrai 1h padrão
-                $total -= 60;
-            }
-
-            // Regras por dia da semana para horas extras (minutos)
-            if ($date->isFriday()) {
-                // sexta: padrão 9h = 540 minutos
-                $extraMinutes = max(0, $total - 480);
-            } else {
-                // seg-qui: padrão 10h = 600 minutos
-                $extraMinutes = max(0, $total - 540);
-            }
-
-            return max(0, (int) $extraMinutes);
-        } catch (\Exception $e) {
-            $this->notification()->error(
-                $title = 'Erro ao calcular minutos extras',
-                $description = 'Ocorreu um erro ao calcular os minutos extras. '.$e->getMessage()
-            );
-
-            // \Log::error("Error calculating extra minutes: " . $e->getMessage());
-            return 0;
-        }
-    }
-
-    private function computeTotalExtra(): void
-    {
-        $weekdayMinutes = 0;
-        $saturdayMinutes = 0;
-        $sundayMinutes = 0;
-        $holidayMinutes = 0;
-
-        if (is_iterable($this->groups)) {
-            foreach ($this->groups as $date => $points) {
-                $times = $this->formatTimeValues($points);
-                $extraMinutes = (int) ($times['hora_extra_minutes'] ?? 0);
-
-                $dt = Carbon::parse($date);
-
-                // Feriado tem precedência sobre o dia da semana
-                if (Holiday::isHoliday($dt)) {
-                    $holidayMinutes += $extraMinutes;
-                } elseif ($dt->isSaturday()) {
-                    $saturdayMinutes += $extraMinutes;
-                } elseif ($dt->isSunday()) {
-                    $sundayMinutes += $extraMinutes;
-                } else {
-                    $weekdayMinutes += $extraMinutes;
-                }
+            return Carbon::createFromFormat('Y-m-d', (string) $value)->startOfDay();
+        } catch (\Throwable $e) {
+            try {
+                return Carbon::parse($value)->startOfDay();
+            } catch (\Throwable $e) {
+                return null;
             }
         }
-
-        $this->totalWeekdayMinutes = $weekdayMinutes;
-        $this->totalSaturdayMinutes = $saturdayMinutes;
-        $this->totalSundayMinutes = $sundayMinutes;
-        $this->totalHolidayMinutes = $holidayMinutes;
-        $this->totalExtraMinutes = $weekdayMinutes + $saturdayMinutes + $sundayMinutes + $holidayMinutes;
-
-        $this->totalWeekdayHours = $this->minutesToTime($weekdayMinutes);
-        $this->totalSaturdayHours = $this->minutesToTime($saturdayMinutes);
-        $this->totalSundayHours = $this->minutesToTime($sundayMinutes);
-        $this->totalHolidayHours = $this->minutesToTime($holidayMinutes);
-        $this->totalExtraHours = $this->minutesToTime($this->totalExtraMinutes);
-    }
-
-    private function minutesToTime(int $minutes): string
-    {
-        if ($minutes <= 0) {
-            return '00:00';
-        }
-
-        $hours = floor($minutes / 60);
-        $mins = $minutes % 60;
-
-        return sprintf('%02d:%02d', $hours, $mins);
     }
 
     public function render()
     {
-        return view('livewire.employee-horas-extras', [
-            'formatTimeValues' => fn ($points) => $this->formatTimeValues($points),
-        ]);
+        return view('livewire.employee-horas-extras');
     }
 }
