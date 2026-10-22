@@ -5,6 +5,7 @@ namespace App\Livewire;
 use App\Models\Employee;
 use App\Services\OvertimeCalculator;
 use App\Services\TimesheetMirror;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
 use Livewire\Attributes\Url;
 use Livewire\Component;
@@ -18,6 +19,7 @@ class EmployeeHorasExtras extends Component
 
     /**
      * Dias do espelho do período, montados pelo TimesheetMirror (mesmos dados da impressão).
+     * Somente campos oficiais: os dados da regra alternativa não entram no estado da tela.
      *
      * @var list<array<string, mixed>>
      */
@@ -117,7 +119,7 @@ class EmployeeHorasExtras extends Component
         $mirror = app(TimesheetMirror::class)->forEmployee($this->employee, $start, $end);
 
         $this->days = array_map(fn (array $day) => [
-            ...$day,
+            ...Arr::except($day, 'alternative'),
             'day_type' => $day['day_type']->value,
             'status' => $day['status']->value,
         ], $mirror['days']);

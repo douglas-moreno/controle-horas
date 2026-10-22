@@ -9,6 +9,7 @@ use App\Services\OvertimeCalculator;
 use App\Services\TimesheetMirror;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Arr;
 
 /**
  * Fase 7.3: bloco de configuração da regra alternativa, desligado por padrão.
@@ -108,7 +109,12 @@ test('the official mirror and overtime are identical with the configuration enab
 
     config(['timesheet.alternative_rule.enabled' => true]);
 
-    expect(app(TimesheetMirror::class)->forEmployee($employee, $start, $end))->toEqual($disabledMirror)
+    $enabledMirror = app(TimesheetMirror::class)->forEmployee($employee, $start, $end);
+
+    expect(array_map(fn (array $day) => Arr::except($day, 'alternative'), $enabledMirror['days']))->toEqual($disabledMirror['days'])
+        ->and(Arr::except($enabledMirror['totals'], 'alternative'))->toEqual($disabledMirror['totals'])
+        ->and($disabledMirror['totals'])->not->toHaveKey('alternative')
+        ->and($enabledMirror['totals'])->toHaveKey('alternative')
         ->and(app(OvertimeCalculator::class)->minutes(CarbonImmutable::parse('2026-07-07'), $slots))->toBe($disabledOvertime)
         ->and($disabledOvertime)->toBe(30)
         ->and(Point::query()->count())->toBe(19);

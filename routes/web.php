@@ -1,6 +1,9 @@
 <?php
 
+use App\Http\Controllers\AlternativeComparisonExportController;
 use App\Http\Controllers\TimesheetPrintController;
+use App\Livewire\AlternativeComparisonReport;
+use App\Livewire\AlternativeEmployeeCodes;
 use App\Livewire\Benefits\BenefitCarryForwardIndex;
 use App\Livewire\Benefits\BenefitPeriodAdjustments;
 use App\Livewire\Benefits\BenefitPeriodCalculation;
@@ -68,6 +71,9 @@ Route::middleware(['auth'])->group(function () {
     Route::get('/reports/resume', EmployeeResumeReport::class)->name('reports.resume');
     Route::get('/reports/timesheet', TimesheetPrint::class)->name('reports.timesheet');
     Route::get('/reports/timesheet/print', TimesheetPrintController::class)->name('reports.timesheet.print');
+    Route::get('/reports/alternative-comparison', AlternativeComparisonReport::class)->name('reports.alternative-comparison');
+    Route::get('/reports/alternative-comparison/csv', AlternativeComparisonExportController::class)->name('reports.alternative-comparison.csv');
+    Route::get('/reports/alternative-comparison/codes', AlternativeEmployeeCodes::class)->name('reports.alternative-comparison.codes');
 
     Route::get('benefits/periods', BenefitPeriodIndex::class)->name('benefits.periods.index');
     Route::get('benefits/periods/{benefitPeriod}/adjustments', BenefitPeriodAdjustments::class)->name('benefits.periods.adjustments');

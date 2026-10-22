@@ -4,12 +4,12 @@
 
 | | |
 |---|---|
-| Versão | 0.9 |
+| Versão | 0.11 |
 | Status | **Rascunho — decisões consolidadas; pendências residuais na seção 7; não aprovada para produção** |
 | Data | 22/10/2026 |
 | Base de código | `main` @ `e90c568` (espelho de ponto, `TimesheetMirror`, `OvertimeCalculator`) |
 | Escopo | Regra alternativa de horas extras e atrasos, calculada em paralelo à regra oficial, somente para comparação |
-| Próximo passo | Fases 7.2 e 7.3 concluídas (calculadora isolada, seção 10; configuração desligada por padrão, seção 11); resolver as pendências da seção 7 antes da fase 7.4 |
+| Próximo passo | Fases 7.2 a 7.5 concluídas (seções 10 a 13); resolver as pendências da seção 7 antes de qualquer uso da comparação fora do teste controlado |
 
 > Este documento não contém código e não autoriza implementação.
 > As respostas de RH/jurídico registradas na seção 6 validam critérios da regra alternativa, mas **não** aprovam
@@ -35,6 +35,8 @@ dados · **[I]** inferido do `Cartao_Ponto_Exemplo.pdf` ou da simulação · **[
 9. Critérios de autorização e de aceite
 10. Implementação da fase 7.2
 11. Implementação da fase 7.3
+12. Implementação da fase 7.4
+13. Implementação da fase 7.5
 
 ---
 
@@ -51,6 +53,8 @@ dados · **[I]** inferido do `Cartao_Ponto_Exemplo.pdf` ou da simulação · **[
 | 0.7 | 22/10/2026 | Fase 7.2 implementada. Decisão D8: marcações em [12:00, 13:00) são desconsideradas na alternativa (trabalho no intervalo deixa de ser extra). Ordem: proteção noturna antes da deduplicação. Nova pendência: meio período com entrada ou saída dentro do almoço |
 | 0.8 | 22/10/2026 | Decisão D9: meio período com marcação no almoço usa a saída presumida às 12:00 ou a entrada presumida às 13:00; encerra a pendência 4. Resultados reais dos testes e dos dados atualizados (seção 10) |
 | 0.9 | 22/10/2026 | Fase 7.3 implementada: configuração `timesheet.alternative_rule.enabled`, desligada por padrão; desligada, nenhum dado alternativo é produzido (seção 11) |
+| 0.10 | 22/10/2026 | Fase 7.4 implementada: `TimesheetMirror` acrescenta a chave `alternative` por dia e nos totais somente com a configuração ligada; tela de horas extras e impressão sem dados alternativos (seção 12) |
+| 0.11 | 22/10/2026 | Fase 7.5 implementada: tela de comparação, correspondência código → funcionário e CSV, restritas a usuários autenticados (D7); código pseudonimizado estável (A8); registro da configuração de jornada em log a cada comparação (D4). Divergência R5 × D7 continua aberta (seção 13) |
 
 ## 1. Regras gerais
 
@@ -174,15 +178,15 @@ As validações formais estão na seção 6. Validação de um critério não eq
 - **Divergência registrada:** a validação formal R5 do RH (seção 6) previa acesso **somente ao pessoal do RH**. A
   decisão D7 do responsável é mais ampla. R5 continua registrada como recebida; a divergência está na seção 7,
   item 2.
-- Nada foi implementado: nem tela, nem rota, nem controle de acesso.
+- Implementado na fase 7.5 conforme D7 (seção 13): rotas no grupo `auth`, sem papéis ou permissões. A divergência com
+  R5 continua aberta.
 
 ### A8 — Identificação no CSV **[DT]**
 
 - O CSV de comparação identifica o funcionário por um código pseudonimizado **estável entre execuções**, para
   permitir comparação histórica. Não traz nome, PIS ou outros identificadores pessoais desnecessários.
 - A correspondência código → funcionário aparece somente em tela autenticada (A7, D7), nunca no CSV.
-- Nada implementado: nem geração de código, nem exportação, nem tela, nem autorização. O mecanismo (por exemplo,
-  um código derivado do ID com chave secreta da aplicação) deve respeitar a arquitetura existente e o acesso A7.
+- Implementado na fase 7.5 (seção 13): código derivado do ID com HMAC-SHA256 e a chave da aplicação (`APP_KEY`).
 - A simulação da etapa 6 usou pseudônimos por execução (F01…F46), que **não** são estáveis.
 
 ### Situações de conferência **[V] + [D]**
@@ -419,24 +423,23 @@ autorizados, removida por D7, e meio período com marcação no almoço (D9).
 
 ## 8. Plano técnico condicionado (fases 7.2–7.5)
 
-As fases 7.2 e 7.3 foram implementadas por autorização explícita do responsável (seções 10 e 11). As fases 7.4 e 7.5
-não estão autorizadas. Nenhuma prevê migration, mudança no importador AFD, no módulo de benefícios, no
+As fases 7.2 a 7.5 foram implementadas por autorização explícita do responsável (seções 10 a 13). Nenhuma prevê migration, mudança no importador AFD, no módulo de benefícios, no
 Golden Dataset ou no `OvertimeCalculator`.
 
 | Fase | Entrega | Testes |
 |---|---|---|
 | 7.2 — **implementada** | Calculadora alternativa isolada (função pura): data, tipo do dia, marcações brutas, jornada e configuração → parcelas, situação e motivo, na ordem da seção 4 | 25 dias do PDF (extras e descontos); todos os casos da seção 5; limites 5/6 min na entrada e na saída; almoço curto, cobrindo o intervalo, deslocado e parcialmente deslocado; A1; A4 com 2 e 4 marcações, inclusive misto e confinado ao intervalo; `12:00 13:00`; `11:59 13:00`; `12:00 13:01`; `11:50 13:00`; `12:00 13:10`; meio período; D1 nos limites 21:59/22:00, 04:59/05:00 e 840/841 min; motivo de cada conferência; relação com o oficial (seção 4) |
 | 7.3 — **implementada** | Bloco de configuração da alternativa, **desligado por padrão** | Configuração desligada = nenhum dado alternativo produzido |
-| 7.4 | `TimesheetMirror` acrescenta dados alternativos (incluindo o motivo de conferência) por dia e nos totais somente com a configuração ligada | Campos e totais oficiais idênticos com a configuração ligada e desligada; testes de caracterização inalterados |
-| 7.5 | Comparação de totais e divergências: tela, correspondência código → funcionário e CSV com código estável (A8) e motivo de conferência, todos restritos a usuários autenticados (A7, D7); registro da configuração de jornada usada (D4) | Usuário não autenticado é redirecionado ao login nas três superfícies; usuário autenticado acessa; impressão e relatórios oficiais sem dados alternativos; CSV sem nome/PIS; configuração registrada em cada comparação |
+| 7.4 — **implementada** | `TimesheetMirror` acrescenta dados alternativos (incluindo o motivo de conferência) por dia e nos totais somente com a configuração ligada | Campos e totais oficiais idênticos com a configuração ligada e desligada; testes de caracterização inalterados |
+| 7.5 — **implementada** | Comparação de totais e divergências: tela, correspondência código → funcionário e CSV com código estável (A8) e motivo de conferência, todos restritos a usuários autenticados (A7, D7); registro da configuração de jornada usada (D4) | Usuário não autenticado é redirecionado ao login nas três superfícies; usuário autenticado acessa; impressão e relatórios oficiais sem dados alternativos; CSV sem nome/PIS; configuração registrada em cada comparação |
 
 ## 9. Critérios de autorização e de aceite
 
 1. Validações J1–J3 e R1–R10 registradas (seção 6), com datas e responsáveis preenchidos.
 2. Critério geral dos limites do almoço definido (seção 7, item 1).
 3. Decisão do responsável sobre a divergência de acesso R5 × D7 (seção 7, item 2).
-4. Autorização explícita do responsável para as fases 7.4 e 7.5. As fases 7.2 e 7.3 foram autorizadas e implementadas
-   com os itens 1–3 ainda pendentes.
+4. Autorização explícita do responsável para as fases 7.2–7.5: concedida; as quatro fases foram implementadas com os
+   itens 1–3 ainda pendentes.
 
 Critérios de aceite da implementação, quando autorizada:
 
@@ -532,3 +535,95 @@ Implementada em 22/10/2026. Somente o bloco de configuração; sem integração 
 
 **Testes (versão 0.9):** suíte completa com 1.193 testes aprovados e nenhuma falha. A regra oficial, o
 `OvertimeCalculator`, o `TimesheetMirror` e os testes de caracterização não foram alterados.
+
+## 12. Implementação da fase 7.4
+
+Implementada em 22/10/2026. Somente dados no `TimesheetMirror`; sem tela, correspondência código → funcionário, CSV
+ou registro da configuração (fase 7.5). Sem migration ou alteração de dados.
+
+- **Configuração desligada (padrão):** dias e totais do espelho não têm a chave `alternative`; o array é o mesmo de
+  antes da fase.
+- **Configuração ligada:** cada dia recebe `alternative`, montado a partir do `AlternativeDayResult` de `forDay()`
+  (marcações brutas do dia e extra oficial): `status`, `status_label`, `needs_review`, `review_reason`,
+  `review_reason_label`, `considered_times`, `uses_official_overtime`, extra e atraso com as parcelas (minutos e
+  HH:MM). Dias em conferência têm extra e atraso `null`, sem cálculo substituto. Os totais recebem `alternative`
+  com a soma dos valores diários alternativos (extra, entrada tardia, saída antecipada, atraso) e `review_days`.
+- **Campos oficiais:** os mesmos, com os mesmos valores, com a configuração ligada ou desligada.
+- **Tela de horas extras e impressão:** continuam só com os valores oficiais. `EmployeeHorasExtras` remove a chave
+  `alternative` antes de guardar os dias no estado da tela, para que os dados alternativos não cheguem ao navegador
+  antes da fase 7.5. A impressão usa somente campos oficiais nomeados.
+
+| Arquivo | Conteúdo |
+|---|---|
+| `app/Services/TimesheetMirror.php` | Injeta `AlternativeTimesheetRule`; acrescenta `alternative` por dia e nos totais somente com a configuração ligada. Cálculo oficial inalterado |
+| `app/Livewire/EmployeeHorasExtras.php` | Remove `alternative` dos dias guardados no estado da tela |
+| `tests/Feature/TimesheetMirrorAlternativeTest.php` | 9 testes: sem dados alternativos por padrão; campos e totais oficiais idênticos ligada e desligada, marcações inalteradas; valores por dia (casos da seção 5); conferência com motivo e oficial preservado (`shifted_lunch`, `night_shift_guard`); totais = soma diária; período vazio; tela sem dados alternativos; impressão idêntica ligada e desligada |
+| `tests/Feature/AlternativeTimesheetRuleConfigTest.php` | O teste do espelho ligado e desligado (fase 7.3) passa a comparar somente os campos oficiais, porque a chave `alternative` agora existe com a configuração ligada |
+
+**Dados reais, período 26/06–25/09 (somente leitura, versão 0.10):** total oficial de 97.623 min por funcionário (PIS)
+e dia, como na seção 10. Espelho de todos os 45 funcionários com marcações no período: campos e totais oficiais
+idênticos com a configuração ligada e desligada. Observação fora do escopo: um PIS está em dois cadastros de
+funcionário; somado por cadastro, o espelho conta as marcações desse PIS duas vezes (101.179 min), situação anterior a
+esta fase e independente da configuração.
+
+**Testes (versão 0.10):** suíte completa com 1.202 testes aprovados e nenhuma falha. `OvertimeCalculator`, a lógica
+oficial do `TimesheetMirror` e os testes de caracterização não foram alterados.
+
+## 13. Implementação da fase 7.5
+
+Implementada em 22/10/2026. Sem migration, alteração de dados ou nova dependência. Com a regra alternativa desligada
+(padrão), as três superfícies não produzem dados: a tela e a correspondência exibem um aviso, o CSV responde 404 e o
+menu não mostra o link.
+
+**Superfícies** (grupo `auth`, conforme D7; usuário não autenticado é redirecionado ao login):
+
+| Rota | Conteúdo |
+|---|---|
+| `reports.alternative-comparison` (`/reports/alternative-comparison`) | Período (26–25, como o espelho), configuração de jornada usada, totais por código (extra e atraso oficiais e alternativos, dias em conferência em cada regra, dias divergentes) e lista de dias divergentes ou de todos os dias, com situação e motivo de conferência. Valor não calculado aparece como `—`, nunca como zero |
+| `reports.alternative-comparison.codes` (`/reports/alternative-comparison/codes`) | Correspondência código → nome e função, com busca. Não mostra PIS |
+| `reports.alternative-comparison.csv` (`/reports/alternative-comparison/csv?start=AAAA-MM-DD&end=AAAA-MM-DD`) | CSV da comparação do período |
+
+**Decisões técnicas [DT]:**
+
+- **Fonte única:** `AlternativeComparison` lê os campos oficiais e a chave `alternative` do `TimesheetMirror` para os
+  funcionários com marcações no período; tela e CSV usam o mesmo resultado. Nenhum cálculo novo.
+- **Código (A8):** `F` + 10 caracteres hexadecimais do HMAC-SHA256 do ID do funcionário com `APP_KEY`. Estável entre
+  execuções enquanto `APP_KEY` não mudar; a troca da chave muda todos os códigos.
+- **Dia divergente:** com extra alternativo calculado, extra ou atraso diferente do oficial (o atraso oficial não
+  calculado, como em dia de 3 marcações, é diferente de 0); sem extra alternativo, somente quando o oficial não exige
+  conferência (ex.: almoço deslocado). Dias que as duas regras deixam sem cálculo (ex.: sem marcação) não são
+  divergentes.
+- **CSV:** UTF-8 com BOM, separador `;`, uma linha por código e dia do período, minutos inteiros, célula vazia = não
+  calculado. Colunas: `codigo`, `data` (dd/mm/aaaa), `tipo_dia`, `marcacoes` (após a deduplicação A1),
+  `oficial_situacao`, `oficial_extra_min`, `oficial_atraso_min`, `alternativa_situacao`, `alternativa_motivo`,
+  `alternativa_extra_min`, `alternativa_atraso_min`, `divergente` (sim/não), `configuracao`. Sem nome nem PIS. Textos
+  iniciados por `=`, `+`, `-`, `@`, tabulação ou retorno de carro recebem apóstrofo, para não virarem fórmula.
+- **Registro da configuração (D4):** sem persistência em banco. Cada comparação (tela ou CSV), ligada ou desligada,
+  grava no log da aplicação a superfície, o período, o usuário, se a regra estava ligada, a configuração de jornada
+  (jornada por dia da semana e tolerância de entrada oficial) e um identificador curto (SHA-256). A mesma
+  configuração aparece na tela e na coluna `configuracao` do CSV.
+
+| Arquivo | Conteúdo |
+|---|---|
+| `app/Services/AlternativeComparison.php` | Comparação por código, totais, dias divergentes e registro da configuração |
+| `app/Services/AlternativeEmployeeCode.php` | Código pseudonimizado estável (A8) |
+| `app/Livewire/AlternativeComparisonReport.php` e view | Tela de comparação |
+| `app/Livewire/AlternativeEmployeeCodes.php` e view | Correspondência código → funcionário |
+| `app/Http/Controllers/AlternativeComparisonExportController.php` | CSV |
+| `app/Http/Requests/AlternativeComparisonExportRequest.php` | Validação do período do CSV |
+| `routes/web.php` | Três rotas no grupo `auth` |
+| `resources/views/components/layouts/app/sidebar.blade.php` | Link "Comparação alternativa", somente com a regra ligada |
+| `tests/Feature/AlternativeComparisonTest.php` | 30 testes: login exigido e acesso autenticado nas três superfícies; nada produzido com a regra desligada; totais, divergências, situação e motivo; valores oficiais iguais ao espelho e idênticos com a regra desligada; marcações inalteradas; `—` para não calculado; período inválido e sem marcações; CSV sem nome/PIS e consistente com a tela; validação do período; proteção contra fórmulas; código estável; correspondência; registro da configuração ligada e desligada; impressão e relatórios oficiais sem dados alternativos |
+
+**Dados reais, período 26/06–25/09 (somente leitura, versão 0.11):** 45 funcionários com marcações, 45 códigos
+distintos, 4.140 linhas, em cerca de 1 s. Totais iguais aos do espelho da seção 12: extra oficial 101.179 min,
+alternativo 102.978 min; atraso oficial 32.043 min, alternativo 33.076 min; 616 dias divergentes (614 por valores, 2
+por `shifted_lunch`). Os totais oficiais por cadastro incluem o PIS duplicado da seção 12, não corrigido nesta fase;
+os dois cadastros recebem códigos diferentes.
+
+**Pendências mantidas:** seção 7, itens 1–3. Em especial, a fase seguiu D7 (todos os usuários autenticados), como
+prevê a seção 8; a divergência com R5 (acesso somente ao RH) continua aberta para decisão do responsável e não foi
+resolvida por esta implementação.
+
+**Testes (versão 0.11):** suíte completa com 1.232 testes aprovados e nenhuma falha. `OvertimeCalculator`, a lógica
+oficial do `TimesheetMirror` e os testes de caracterização não foram alterados.

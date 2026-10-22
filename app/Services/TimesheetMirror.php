@@ -35,6 +35,11 @@ use InvalidArgumentException;
  * - Sábado, domingo e feriado não têm jornada: não há atraso, e dias com marcação
  *   são sinalizados para conferência.
  *
+ * Regra alternativa (docs/espelho-ponto-regra-alternativa.md, fase 7.4): somente com
+ * `timesheet.alternative_rule.enabled` ligada, cada dia e os totais recebem a chave
+ * `alternative`, calculada pelo AlternativeTimesheetRule a partir das marcações brutas
+ * e do extra oficial do dia. Os campos oficiais não mudam; desligada, a chave não existe.
+ *
  * Somente lê `points` e `holidays`; não grava nada.
  */
 class TimesheetMirror
@@ -42,6 +47,7 @@ class TimesheetMirror
     public function __construct(
         private BusinessCalendar $calendar,
         private OvertimeCalculator $overtime,
+        private AlternativeTimesheetRule $alternativeRule,
     ) {}
 
     /**
@@ -79,7 +85,13 @@ class TimesheetMirror
             }
         }
 
-        return ['days' => $days, 'totals' => $this->totals($days)];
+        $totals = $this->totals($days);
+
+        if ($this->alternativeRule->isEnabled()) {
+            $totals['alternative'] = $this->alternativeTotals($days);
+        }
+
+        return ['days' => $days, 'totals' => $totals];
     }
 
     /**
@@ -139,8 +151,9 @@ class TimesheetMirror
 
         $delay = $lateEntry === null ? null : $lateEntry + $earlyLeave;
         $overtime = $this->overtime->minutes($date, $slots);
+        $alternative = $this->alternativeRule->forDay($date, $dayType, $this->times($points)->all(), $overtime);
 
-        return [
+        $day = [
             'date' => $date->format('Y-m-d'),
             'display_date' => $this->displayDate($date),
             'day_type' => $dayType,
@@ -158,6 +171,66 @@ class TimesheetMirror
             'early_leave_minutes' => $earlyLeave,
             'delay_minutes' => $delay,
             'delay' => self::format($delay),
+        ];
+
+        if ($alternative !== null) {
+            $day['alternative'] = $this->alternativeDay($alternative);
+        }
+
+        return $day;
+    }
+
+    /**
+     * Dados alternativos do dia, separados dos campos oficiais. Extra e atraso null
+     * indicam dia não calculado pela alternativa (conferência, sem marcação ou sem jornada).
+     *
+     * @return array<string, mixed>
+     */
+    private function alternativeDay(AlternativeDayResult $result): array
+    {
+        return [
+            'status' => $result->status,
+            'status_label' => $result->status->label(),
+            'needs_review' => $result->needsReview(),
+            'review_reason' => $result->reviewReason,
+            'review_reason_label' => $result->reviewReason?->label(),
+            'considered_times' => $result->consideredTimes,
+            'uses_official_overtime' => $result->usesOfficialOvertime,
+            'overtime_minutes' => $result->overtimeMinutes,
+            'overtime' => self::format($result->overtimeMinutes),
+            'early_arrival_minutes' => $result->earlyArrivalMinutes,
+            'after_exit_minutes' => $result->afterExitMinutes,
+            'late_entry_minutes' => $result->lateEntryMinutes,
+            'early_leave_minutes' => $result->earlyLeaveMinutes,
+            'delay_minutes' => $result->delayMinutes,
+            'delay' => self::format($result->delayMinutes),
+        ];
+    }
+
+    /**
+     * Totais alternativos: soma dos valores diários alternativos; dias não calculados
+     * contam como zero e aparecem em `review_days` quando exigem conferência.
+     *
+     * @param  list<array<string, mixed>>  $days
+     * @return array<string, mixed>
+     */
+    private function alternativeTotals(array $days): array
+    {
+        $alternatives = collect($days)->pluck('alternative');
+        $sum = fn (string $key): int => $alternatives->sum(fn (array $day) => $day[$key] ?? 0);
+
+        $totals = [
+            'overtime_minutes' => $sum('overtime_minutes'),
+            'late_entry_minutes' => $sum('late_entry_minutes'),
+            'early_leave_minutes' => $sum('early_leave_minutes'),
+            'delay_minutes' => $sum('delay_minutes'),
+            'review_days' => $alternatives->where('needs_review', true)->count(),
+        ];
+
+        return [
+            ...$totals,
+            'overtime' => OvertimeCalculator::format($totals['overtime_minutes']),
+            'delay' => OvertimeCalculator::format($totals['delay_minutes']),
         ];
     }
 

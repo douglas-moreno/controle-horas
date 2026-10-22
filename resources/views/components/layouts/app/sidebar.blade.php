@@ -18,6 +18,9 @@
                     <flux:navlist.item icon="document-currency-dollar" :href="route('reports.extra-hours')" :current="request()->routeIs('reports.extra-hours')" wire:navigate>{{ __('Relatório') }}</flux:navlist.item>
                     <flux:navlist.item icon="document-currency-dollar" :href="route('reports.resume')" :current="request()->routeIs('reports.resume')" wire:navigate>{{ __('Resumo') }}</flux:navlist.item>
                     <flux:navlist.item icon="printer" :href="route('reports.timesheet')" :current="request()->routeIs('reports.timesheet')" wire:navigate>{{ __('Espelho de Ponto') }}</flux:navlist.item>
+                    @if (app(\App\Services\AlternativeTimesheetRule::class)->isEnabled())
+                        <flux:navlist.item icon="scale" :href="route('reports.alternative-comparison')" :current="request()->routeIs('reports.alternative-comparison*')" wire:navigate>{{ __('Comparação alternativa') }}</flux:navlist.item>
+                    @endif
                     <flux:navlist.item icon="calendar-days" :href="route('holidays.index')" :current="request()->routeIs('holidays.*')" wire:navigate>{{ __('Feriados') }}</flux:navlist.item>
                 </flux:navlist.group>
 
