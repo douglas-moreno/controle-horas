@@ -16,6 +16,12 @@ enum TimesheetDayStatus: string
     case NonWorkingDay = 'non_working_day';
     case NonWorkingDayWorked = 'non_working_day_worked';
 
+    /**
+     * Usada somente pela regra alternativa (AlternativeTimesheetRule); o espelho
+     * oficial nunca produz esta situação.
+     */
+    case OutsideSchedule = 'outside_schedule';
+
     public function label(): string
     {
         return match ($this) {
@@ -26,6 +32,7 @@ enum TimesheetDayStatus: string
             self::NoSchedule => 'Sem jornada definida',
             self::NonWorkingDay => '',
             self::NonWorkingDayWorked => 'Trabalho fora da jornada',
+            self::OutsideSchedule => 'Conferência manual — fora das janelas previstas',
         };
     }
 

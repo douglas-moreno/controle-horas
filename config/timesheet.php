@@ -47,4 +47,20 @@ return [
 
     'entry_tolerance_minutes' => (int) env('TIMESHEET_ENTRY_TOLERANCE_MINUTES', 5),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Regra alternativa (comparação)
+    |--------------------------------------------------------------------------
+    |
+    | Regra alternativa de horas extras e atrasos, calculada em paralelo à
+    | oficial somente para comparação (docs/espelho-ponto-regra-alternativa.md).
+    | Desligada por padrão: nenhum dado alternativo é produzido. Ligada ou
+    | desligada, a regra oficial e seus resultados não mudam.
+    |
+    */
+
+    'alternative_rule' => [
+        'enabled' => (bool) env('TIMESHEET_ALTERNATIVE_RULE_ENABLED', false),
+    ],
+
 ];
