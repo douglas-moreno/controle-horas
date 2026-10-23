@@ -1,19 +1,21 @@
 # Espelho de Ponto — Regra alternativa de horas extras e atrasos (Fase 7.1)
 
-**Especificação preliminar**
+**Especificação — implementada, homologada pelo RH e publicada; módulo encerrado**
 
 | | |
 |---|---|
-| Versão | 0.11 |
-| Status | **Rascunho — decisões consolidadas; pendências residuais na seção 7; não aprovada para produção** |
+| Versão | 0.12 |
+| Status | **Encerrado — fases 7.2 a 7.5 implementadas, cálculos homologados pelo RH, publicado em produção com a regra alternativa desligada por padrão; pendências residuais na seção 7** |
 | Data | 22/10/2026 |
-| Base de código | `main` @ `e90c568` (espelho de ponto, `TimesheetMirror`, `OvertimeCalculator`) |
+| Base de código | `main` @ `fa32a59` (última alteração do módulo); especificação iniciada sobre `e90c568` (espelho de ponto, `TimesheetMirror`, `OvertimeCalculator`) |
 | Escopo | Regra alternativa de horas extras e atrasos, calculada em paralelo à regra oficial, somente para comparação |
-| Próximo passo | Fases 7.2 a 7.5 concluídas (seções 10 a 13); resolver as pendências da seção 7 antes de qualquer uso da comparação fora do teste controlado |
+| Próximo passo | Nenhuma sprint planejada (seção 14). Ativação operacional da regra é decisão separada; correções somente sob demanda, se surgirem problemas reais |
 
-> Este documento não contém código e não autoriza implementação.
-> As respostas de RH/jurídico registradas na seção 6 validam critérios da regra alternativa, mas **não** aprovam
-> a regra para uso em produção. A regra oficial de horas extras permanece inalterada.
+> Este documento não contém código. As fases 7.2 a 7.5 foram implementadas por autorização explícita do responsável
+> (seções 10 a 13) e o RH validou os cálculos, considerando-os corretos (seção 6). Não há registro de aprovação
+> jurídica formal da regra como um todo; as respostas jurídicas registradas (J1–J3) validam critérios específicos.
+> A regra oficial de horas extras permanece inalterada e continua sendo a usada nos cálculos oficiais, na impressão
+> e nos relatórios. A regra alternativa está desligada por padrão; ligá-la é uma decisão operacional separada.
 
 Legenda de origem: **[D]** decisão do responsável · **[V]** validado formalmente por RH/jurídico (seção 6) ·
 **[DT]** decisão técnica preliminar · **[PR]** proposta ainda não validada · **[C]** comprovado no código ou nos
@@ -31,12 +33,13 @@ dados · **[I]** inferido do `Cartao_Ponto_Exemplo.pdf` ou da simulação · **[
 5. Casos de referência
 6. Validações recebidas de RH/jurídico
 7. Pendências
-8. Plano técnico condicionado (fases 7.2–7.5)
+8. Plano técnico (fases 7.2–7.5) — concluído
 9. Critérios de autorização e de aceite
 10. Implementação da fase 7.2
 11. Implementação da fase 7.3
 12. Implementação da fase 7.4
 13. Implementação da fase 7.5
+14. Encerramento do módulo
 
 ---
 
@@ -55,6 +58,7 @@ dados · **[I]** inferido do `Cartao_Ponto_Exemplo.pdf` ou da simulação · **[
 | 0.9 | 22/10/2026 | Fase 7.3 implementada: configuração `timesheet.alternative_rule.enabled`, desligada por padrão; desligada, nenhum dado alternativo é produzido (seção 11) |
 | 0.10 | 22/10/2026 | Fase 7.4 implementada: `TimesheetMirror` acrescenta a chave `alternative` por dia e nos totais somente com a configuração ligada; tela de horas extras e impressão sem dados alternativos (seção 12) |
 | 0.11 | 22/10/2026 | Fase 7.5 implementada: tela de comparação, correspondência código → funcionário e CSV, restritas a usuários autenticados (D7); código pseudonimizado estável (A8); registro da configuração de jornada em log a cada comparação (D4). Divergência R5 × D7 continua aberta (seção 13) |
+| 0.12 | 22/10/2026 | Encerramento do módulo: fases 7.2 a 7.5 concluídas; RH validou os cálculos como corretos; política de acesso definida (todos os usuários autenticados, D7), encerrando a divergência R5 × D7; PIS duplicado em dois cadastros corrigido (qualidade de dados, fora das fases); push, deploy e migrations concluídos e sistema verificado após o deploy; regra alternativa desligada por padrão. Sem aprovação jurídica formal registrada. Nenhuma sprint nova (seção 14) |
 
 ## 1. Regras gerais
 
@@ -75,7 +79,8 @@ dados · **[I]** inferido do `Cartao_Ponto_Exemplo.pdf` ou da simulação · **[
 
 ## 2. Matriz de decisões P1–P7 e decisões complementares D1–D9
 
-As validações formais estão na seção 6. Validação de um critério não equivale a aprovação da regra para produção.
+As validações formais estão na seção 6. Validação de um critério não equivale a aprovação jurídica da regra nem à
+sua ativação; a homologação dos cálculos pelo RH está registrada na seção 6.
 
 | # | Decisão | Regra funcional | Validação | Impacto medido (26/06–25/09) |
 |---|---|---|---|---|
@@ -97,7 +102,7 @@ As validações formais estão na seção 6. Validação de um critério não eq
 | D4 | Registro da configuração de jornada **[D]** | Cada comparação registra a configuração de jornada usada | Regra geral 9; seção 8, fase 7.5 |
 | D5 | `11:50 13:00` vai para conferência **[D]** | Dia com 2 marcações como `11:50 13:00` vai integralmente para conferência, sem extra nem atraso alternativos, como `11:59 13:00` e `12:00 13:01` (R8). O critério geral continua pendente | Seção 3, limites do almoço; seção 4, passo 5 |
 | D6 | Presunção do almoço mantida **[D]** | Sem marcações específicas do almoço (2 marcações), presume-se o intervalo 12:00–13:00 (P1), respeitadas as exceções de limites do almoço (R8, D5), almoço deslocado (R9, D2), pares fora das janelas (A4) e turno noturno (D1) | Seção 2, P1; seção 4, passo 7 |
-| D7 | Acesso para todos os usuários autenticados **[D]** | A comparação, a correspondência código → funcionário e o CSV ficam disponíveis a qualquer usuário autenticado. Usuários não autenticados não têm acesso. Substitui a lista de e-mails autorizados e o bloqueio por padrão da versão 0.5. **Diverge da validação R5** (seção 7, item 2) | Seção 3, A7 e A8 |
+| D7 | Acesso para todos os usuários autenticados **[D]** | A comparação, a correspondência código → funcionário e o CSV ficam disponíveis a qualquer usuário autenticado. Usuários não autenticados não têm acesso. Substitui a lista de e-mails autorizados e o bloqueio por padrão da versão 0.5. Divergia da validação R5; **política de acesso definida na versão 0.12: prevalece D7** (seção 7, itens encerrados) | Seção 3, A7 e A8 |
 | D8 | Marcações no intervalo de almoço desconsideradas **[D]** | Os funcionários normalmente não registram o almoço. Na alternativa, presume-se o intervalo 12:00–13:00 e as marcações em [12:00, 13:00) não contam como extra nem atraso. A marcação exatamente às 13:00 pertence à janela da tarde. Banco, dados brutos, AFD e cálculo oficial não mudam. Substitui o extra por trabalho no intervalo da P4 | Seção 4, passo 7; complementada por D9 |
 | D9 | Meio período com marcação no almoço **[D]** | Exatamente 2 marcações deduplicadas, fora da P1, com uma delas em [12:00, 12:59]: entrada antes das 12:00 e saída no almoço → saída presumida às 12:00; entrada no almoço e saída depois das 13:00 → entrada presumida às 13:00. A marcação no almoço não gera extra nem atraso por si só. Sem determinação inequívoca → conferência. Dados brutos, AFD e regra oficial inalterados | Seção 4, passo 7 |
 
@@ -175,11 +180,10 @@ As validações formais estão na seção 6. Validação de um critério não eq
   não têm acesso, seguindo a autenticação já usada pelas rotas do sistema (grupo `auth`) **[C]**.
 - Removidos na versão 0.6: a lista de e-mails autorizados, a exigência dessa lista e o bloqueio por padrão vinculado
   a ela. Não são necessários papéis, permissões nem migrations.
-- **Divergência registrada:** a validação formal R5 do RH (seção 6) previa acesso **somente ao pessoal do RH**. A
-  decisão D7 do responsável é mais ampla. R5 continua registrada como recebida; a divergência está na seção 7,
-  item 2.
-- Implementado na fase 7.5 conforme D7 (seção 13): rotas no grupo `auth`, sem papéis ou permissões. A divergência com
-  R5 continua aberta.
+- **Divergência encerrada:** a validação formal R5 do RH (seção 6) previa acesso **somente ao pessoal do RH**; a
+  decisão D7 do responsável é mais ampla. Na versão 0.12 a política de acesso foi definida: todos os usuários
+  autenticados podem acessar a comparação. R5 continua registrada como recebida, substituída por essa decisão.
+- Implementado na fase 7.5 conforme D7 (seção 13): rotas no grupo `auth`, sem papéis ou permissões.
 
 ### A8 — Identificação no CSV **[DT]**
 
@@ -197,15 +201,16 @@ As validações formais estão na seção 6. Validação de um critério não eq
   deslocado total ou parcial (R9, D2) e proteção de turno noturno (D1).
 - **Motivo específico (D3):** cada dia em conferência guarda também o motivo. A arquitetura documentada permite isso:
   cada dia do `TimesheetMirror` é um conjunto de campos que já traz `status`, `status_label` e `needs_review`
-  **[C]**, e o bloco alternativo pode acrescentar um campo de motivo sem alterar os campos oficiais. Valores
-  propostos **[DT]**, sem implementação:
+  **[C]**, e o bloco alternativo acrescenta um campo de motivo sem alterar os campos oficiais. Valores
+  implementados na fase 7.2 (`AlternativeReviewReason`, seção 10) **[C]**:
 
   | Motivo | Situação |
   |---|---|
   | `pair_outside_windows` | Par fora das janelas, inclusive dia misto e par confinado ao intervalo (A4) |
-  | `lunch_boundary` | Limites do almoço (R8) |
+  | `lunch_boundary` | Limites do almoço (R8, D5) |
   | `shifted_lunch` | Almoço deslocado, total ou parcial (R9, D2) |
   | `night_shift_guard` | Proteção de turno noturno (D1) |
+  | `lunch_interval_punch` | Meio período com marcação no almoço sem determinação inequívoca (D9) |
 
 - O rótulo e o motivo indicam que as marcações são insuficientes ou incompatíveis com a regra alternativa e precisam
   de conferência. **Não** são conclusão disciplinar, falta ou irregularidade do funcionário.
@@ -400,48 +405,85 @@ Respostas formais registradas. Nomes, cargos e datas não foram informados e nã
 | R9 | RH | Trabalho entre 12:00 e 13:00 com almoço em outro horário vai para conferência; não contar como extra automaticamente | P4 | a preencher | a preencher |
 | R10 | RH | Rótulo confirmado: `Conferência manual — fora das janelas previstas` | situações de conferência | a preencher | a preencher |
 
-As decisões D1–D7 (seção 2) são do responsável e não constam desta tabela de validações formais. A decisão D7
-(acesso) diverge de R5; ver seção 7, item 2.
+As decisões D1–D9 (seção 2) são do responsável e não constam desta tabela de validações formais. A decisão D7
+(acesso) divergia de R5; a política de acesso foi definida na versão 0.12 (seção 7, itens encerrados).
+
+**Homologação dos cálculos (versão 0.12):** após a publicação, o RH verificou os cálculos da regra alternativa e os
+considerou corretos. Nome, cargo e data da homologação não foram informados e não são preenchidos aqui. A homologação
+do RH **não** equivale a aprovação jurídica formal: não há registro de manifestação jurídica sobre a regra como um
+todo, além das respostas J1–J3 sobre critérios específicos.
 
 ## 7. Pendências
 
-Nenhuma destas pendências foi resolvida por inferência.
+Nenhuma destas pendências foi resolvida por inferência. A homologação dos cálculos pelo RH (seção 6) não resolve as
+pendências abaixo, que continuam sem decisão ou sem registro.
 
 1. **Critério geral dos limites do almoço — pendente:** os casos confirmados são `11:59 13:00`, `12:00 13:01` (R8) e
    `11:50 13:00` (D5). Falta a regra que decide outros pares de 2 marcações próximos do intervalo, como `12:00 13:10`
    ou `11:30 13:00`. Todos os casos confirmados têm uma das marcações exatamente em 12:00 ou 13:00, mas isso não
    foi decidido como regra: aplicada de forma geral, levaria também `07:30 13:00` para conferência. Até a definição,
    só os três casos confirmados vão para conferência por este passo.
-2. **Divergência de acesso entre R5 e D7 — registrada:** o RH validou formalmente acesso somente ao seu pessoal (R5);
-   o responsável decidiu acesso a todos os usuários autenticados (D7). Este documento segue D7 e mantém R5 como
-   registro. Cabe ao responsável decidir se a divergência exige nova manifestação do RH antes da implementação.
-3. **Datas e responsáveis das validações formais:** preencher na seção 6 (J1–J3, R1–R10).
+2. **Datas e responsáveis das validações formais — pendente:** preencher na seção 6 (J1–J3, R1–R10 e homologação do
+   RH da versão 0.12).
+
+Fora das pendências do módulo, por serem decisões separadas: a ativação operacional da regra alternativa e qualquer
+promoção da regra a oficial (regra geral 7). Nenhuma das duas foi decidida.
 
 Itens encerrados: almoço parcialmente sobreposto (D2), proteção de turno noturno (D1), rótulo de R8 e R9 (D3),
 registro da configuração de jornada (D4), `11:50 13:00` (D5), presunção do almoço (D6), lista de e-mails
-autorizados, removida por D7, e meio período com marcação no almoço (D9).
+autorizados, removida por D7, meio período com marcação no almoço (D9) e, na versão 0.12:
 
-## 8. Plano técnico condicionado (fases 7.2–7.5)
+- **Divergência de acesso entre R5 e D7 — encerrada:** o RH havia validado acesso somente ao seu pessoal (R5); o
+  responsável decidiu acesso a todos os usuários autenticados (D7). Decisão final: todos os usuários autenticados
+  podem acessar a comparação, a correspondência código → funcionário e o CSV; usuários não autenticados não têm
+  acesso. É o comportamento implementado na fase 7.5.
+- **PIS duplicado em dois cadastros — resolvido (qualidade de dados):** um PIS estava em dois cadastros de
+  funcionário (seções 12 e 13), situação anterior às fases 7.x. Em 22/10/2026, após a publicação, o cadastro
+  rescindido foi removido diretamente na base, por decisão do responsável; permaneceu um único cadastro, ativo, e as
+  marcações do PIS foram preservadas (são vinculadas ao funcionário pelo PIS). A correção **não** fez parte das fases
+  7.2–7.5 e não alterou código. Os números das seções 12 e 13, que contam esse PIS duas vezes por cadastro, são
+  anteriores à correção.
 
-As fases 7.2 a 7.5 foram implementadas por autorização explícita do responsável (seções 10 a 13). Nenhuma prevê migration, mudança no importador AFD, no módulo de benefícios, no
-Golden Dataset ou no `OvertimeCalculator`.
+## 8. Plano técnico (fases 7.2–7.5) — concluído
+
+As fases 7.2 a 7.5 foram implementadas por autorização explícita do responsável (seções 10 a 13) e estão
+**concluídas**. Nenhuma prevê migration, mudança no importador AFD, no módulo de benefícios, no Golden Dataset ou no
+`OvertimeCalculator`.
 
 | Fase | Entrega | Testes |
 |---|---|---|
-| 7.2 — **implementada** | Calculadora alternativa isolada (função pura): data, tipo do dia, marcações brutas, jornada e configuração → parcelas, situação e motivo, na ordem da seção 4 | 25 dias do PDF (extras e descontos); todos os casos da seção 5; limites 5/6 min na entrada e na saída; almoço curto, cobrindo o intervalo, deslocado e parcialmente deslocado; A1; A4 com 2 e 4 marcações, inclusive misto e confinado ao intervalo; `12:00 13:00`; `11:59 13:00`; `12:00 13:01`; `11:50 13:00`; `12:00 13:10`; meio período; D1 nos limites 21:59/22:00, 04:59/05:00 e 840/841 min; motivo de cada conferência; relação com o oficial (seção 4) |
-| 7.3 — **implementada** | Bloco de configuração da alternativa, **desligado por padrão** | Configuração desligada = nenhum dado alternativo produzido |
-| 7.4 — **implementada** | `TimesheetMirror` acrescenta dados alternativos (incluindo o motivo de conferência) por dia e nos totais somente com a configuração ligada | Campos e totais oficiais idênticos com a configuração ligada e desligada; testes de caracterização inalterados |
-| 7.5 — **implementada** | Comparação de totais e divergências: tela, correspondência código → funcionário e CSV com código estável (A8) e motivo de conferência, todos restritos a usuários autenticados (A7, D7); registro da configuração de jornada usada (D4) | Usuário não autenticado é redirecionado ao login nas três superfícies; usuário autenticado acessa; impressão e relatórios oficiais sem dados alternativos; CSV sem nome/PIS; configuração registrada em cada comparação |
+| 7.2 — **concluída** | Calculadora alternativa isolada (função pura): data, tipo do dia, marcações brutas, jornada e configuração → parcelas, situação e motivo, na ordem da seção 4 | 25 dias do PDF (extras e descontos); todos os casos da seção 5; limites 5/6 min na entrada e na saída; almoço curto, cobrindo o intervalo, deslocado e parcialmente deslocado; A1; A4 com 2 e 4 marcações, inclusive misto e confinado ao intervalo; `12:00 13:00`; `11:59 13:00`; `12:00 13:01`; `11:50 13:00`; `12:00 13:10`; meio período; D1 nos limites 21:59/22:00, 04:59/05:00 e 840/841 min; motivo de cada conferência; relação com o oficial (seção 4) |
+| 7.3 — **concluída** | Bloco de configuração da alternativa, **desligado por padrão** | Configuração desligada = nenhum dado alternativo produzido |
+| 7.4 — **concluída** | `TimesheetMirror` acrescenta dados alternativos (incluindo o motivo de conferência) por dia e nos totais somente com a configuração ligada | Campos e totais oficiais idênticos com a configuração ligada e desligada; testes de caracterização inalterados |
+| 7.5 — **concluída** | Comparação de totais e divergências: tela, correspondência código → funcionário e CSV com código estável (A8) e motivo de conferência, todos restritos a usuários autenticados (A7, D7); registro da configuração de jornada usada (D4) | Usuário não autenticado é redirecionado ao login nas três superfícies; usuário autenticado acessa; impressão e relatórios oficiais sem dados alternativos; CSV sem nome/PIS; configuração registrada em cada comparação |
+
+**Resultado das fases (versão 0.12):**
+
+- **Testes:** suíte completa com 1.232 testes aprovados e nenhuma falha (seção 13). Os testes de caracterização da
+  regra oficial não foram alterados.
+- **Revisão visual:** interface aprovada.
+- **Homologação:** o RH verificou os cálculos e os considerou corretos (seção 6). Sem aprovação jurídica formal
+  registrada.
+- **Publicação:** push para o GitHub, deploy e execução das migrations concluídos; sistema verificado em funcionamento
+  após o deploy. O módulo não tem migration própria; as migrations executadas no deploy pertencem a outras entregas
+  publicadas junto (benefícios e importação AFD).
+- **Configuração:** a regra alternativa continua **desabilitada por padrão** (`TIMESHEET_ALTERNATIVE_RULE_ENABLED=false`,
+  também fixada no ambiente de testes). Sua ativação operacional é uma decisão separada, não tomada neste módulo.
+- **Regra oficial:** preservada. Cálculos oficiais, impressão e relatórios continuam usando somente a regra oficial.
 
 ## 9. Critérios de autorização e de aceite
 
-1. Validações J1–J3 e R1–R10 registradas (seção 6), com datas e responsáveis preenchidos.
-2. Critério geral dos limites do almoço definido (seção 7, item 1).
-3. Decisão do responsável sobre a divergência de acesso R5 × D7 (seção 7, item 2).
-4. Autorização explícita do responsável para as fases 7.2–7.5: concedida; as quatro fases foram implementadas com os
-   itens 1–3 ainda pendentes.
+Critérios originais (versão 0.11), com a situação na versão 0.12:
 
-Critérios de aceite da implementação, quando autorizada:
+1. Validações J1–J3 e R1–R10 registradas (seção 6), com datas e responsáveis preenchidos. — **Parcial:** validações
+   e homologação do RH registradas; datas e responsáveis continuam pendentes (seção 7, item 2).
+2. Critério geral dos limites do almoço definido (seção 7, item 1). — **Pendente.**
+3. Decisão do responsável sobre a divergência de acesso R5 × D7. — **Atendido:** todos os usuários autenticados
+   (seção 7, itens encerrados).
+4. Autorização explícita do responsável para as fases 7.2–7.5: concedida; as quatro fases foram implementadas com os
+   itens 1–3 ainda pendentes. — **Atendido;** fases concluídas.
+
+Critérios de aceite da implementação, quando autorizada (texto original):
 
 - 25 dias do PDF: 23 idênticos em extra e atraso; 29/06 e 09/07 com o mesmo atraso do PDF e extra menor, porque os
   minutos no almoço não contam (D8, D9);
@@ -451,6 +493,19 @@ Critérios de aceite da implementação, quando autorizada:
 - acesso negado a usuários não autenticados, na tela, na correspondência e no CSV; acesso permitido a autenticados;
 - suíte completa sem falhas;
 - diferenças em relação à simulação explicadas pelas decisões P2, A1, A4, R3, R7–R9, D1, D2, D5, D8 e D9.
+
+Resultados alcançados (versão 0.12):
+
+| Critério de aceite | Resultado |
+|---|---|
+| 25 dias do PDF | Atendido: 23 idênticos; 29/06 e 09/07 com o mesmo atraso e extra menor por D8/D9 (seção 10) |
+| Casos da seção 5, com motivo | Atendido: reproduzidos nos testes da fase 7.2 (seção 10) |
+| Total oficial 26/06–25/09 em 97.623 min | Atendido por PIS e dia (seções 10 e 12) |
+| Campos oficiais idênticos ligada e desligada | Atendido: testes das fases 7.3 e 7.4 e conferência dos 45 funcionários (seção 12) |
+| Acesso negado a não autenticados, permitido a autenticados | Atendido nas três superfícies (seção 13), conforme a política de acesso definida |
+| Suíte completa sem falhas | Atendido: 1.232 testes aprovados (seção 13) |
+| Diferenças em relação à simulação explicadas | Atendido (seções 5 e 10) |
+| Homologação dos cálculos (acrescentado na versão 0.12) | Atendido: RH considerou os cálculos corretos (seção 6) |
 
 ## 10. Implementação da fase 7.2
 
@@ -564,7 +619,7 @@ ou registro da configuração (fase 7.5). Sem migration ou alteração de dados.
 e dia, como na seção 10. Espelho de todos os 45 funcionários com marcações no período: campos e totais oficiais
 idênticos com a configuração ligada e desligada. Observação fora do escopo: um PIS está em dois cadastros de
 funcionário; somado por cadastro, o espelho conta as marcações desse PIS duas vezes (101.179 min), situação anterior a
-esta fase e independente da configuração.
+esta fase e independente da configuração. Corrigido depois, fora das fases (seção 7, itens encerrados).
 
 **Testes (versão 0.10):** suíte completa com 1.202 testes aprovados e nenhuma falha. `OvertimeCalculator`, a lógica
 oficial do `TimesheetMirror` e os testes de caracterização não foram alterados.
@@ -619,11 +674,36 @@ menu não mostra o link.
 distintos, 4.140 linhas, em cerca de 1 s. Totais iguais aos do espelho da seção 12: extra oficial 101.179 min,
 alternativo 102.978 min; atraso oficial 32.043 min, alternativo 33.076 min; 616 dias divergentes (614 por valores, 2
 por `shifted_lunch`). Os totais oficiais por cadastro incluem o PIS duplicado da seção 12, não corrigido nesta fase;
-os dois cadastros recebem códigos diferentes.
+os dois cadastros recebem códigos diferentes. O PIS duplicado foi corrigido depois, fora das fases (seção 7, itens
+encerrados); esses números são anteriores à correção.
 
-**Pendências mantidas:** seção 7, itens 1–3. Em especial, a fase seguiu D7 (todos os usuários autenticados), como
-prevê a seção 8; a divergência com R5 (acesso somente ao RH) continua aberta para decisão do responsável e não foi
-resolvida por esta implementação.
+**Pendências na versão 0.11:** seção 7, então com três itens. A fase seguiu D7 (todos os usuários autenticados), como
+previa a seção 8; a divergência com R5 (acesso somente ao RH) ficou aberta naquela versão e foi encerrada na versão
+0.12 com a definição da política de acesso (seção 7, itens encerrados).
 
 **Testes (versão 0.11):** suíte completa com 1.232 testes aprovados e nenhuma falha. `OvertimeCalculator`, a lógica
 oficial do `TimesheetMirror` e os testes de caracterização não foram alterados.
+
+## 14. Encerramento do módulo
+
+Registrado em 22/10/2026 (versão 0.12). Este documento é o plano vigente do módulo: não existe outro documento de
+sprints para a regra alternativa. A seção 8 controla as fases 7.2–7.5.
+
+| Item | Situação |
+|---|---|
+| Fases 7.2, 7.3, 7.4 e 7.5 | Concluídas (seções 10 a 13) |
+| Testes | 1.232 aprovados, nenhuma falha |
+| Revisão visual da interface | Aprovada |
+| Homologação dos cálculos | RH considerou os cálculos corretos (seção 6) |
+| Aprovação jurídica formal da regra | Não registrada; somente J1–J3 sobre critérios específicos (seção 6) |
+| Política de acesso | Definida: todos os usuários autenticados (D7); divergência R5 × D7 encerrada (seção 7) |
+| PIS duplicado em dois cadastros | Resolvido como qualidade de dados, fora das fases (seção 7) |
+| Push, deploy e migrations | Concluídos; sistema verificado em funcionamento após o deploy |
+| Regra alternativa | Desabilitada por padrão; ativação operacional é decisão separada |
+| Regra oficial | Preservada; continua sendo a usada nos cálculos oficiais, na impressão e nos relatórios |
+
+O módulo de regra alternativa do espelho de ponto está **formalmente encerrado**. Nenhuma sprint nova está planejada
+para ele. Correções futuras serão tratadas sob demanda, somente se surgirem problemas reais. As pendências residuais
+da seção 7 (critério geral dos limites do almoço; datas e responsáveis das validações) continuam abertas e não
+impedem o encerramento, porque não alteram o comportamento implementado; qualquer decisão sobre elas que mude a regra
+será tratada como trabalho sob demanda.
