@@ -16,7 +16,9 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * - `max_nsr`: maior NSR do arquivo (qualquer tipo);
  * - `max_valid_punch_nsr`: maior NSR de marcação válida do arquivo;
  * - `max_imported_nsr`: maior NSR efetivamente gravado em `points` por esta importação.
- * As marcações rejeitadas ficam em `afd_import_rejections`, com NSR e motivo.
+ * As marcações rejeitadas ficam em `afd_import_rejections`, com NSR e motivo. As retidas
+ * por decisão do RH (`afd_historical_nsrs`, classificação R) não são gravadas: contam só
+ * em `withheld`. `operator` é o responsável informado no comando afd:import.
  */
 class AfdImport extends Model
 {
@@ -61,6 +63,7 @@ class AfdImport extends Model
             'existing' => 'integer',
             'already_processed' => 'integer',
             'rejected' => 'integer',
+            'withheld' => 'integer',
             'created_at' => 'immutable_datetime',
             'completed_at' => 'immutable_datetime',
         ];

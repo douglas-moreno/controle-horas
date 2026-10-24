@@ -1,6 +1,9 @@
 <?php
 
+use App\Models\AfdHistoricalNsr;
 use App\Models\Holiday;
+use App\Services\AfdLegacyAlignment;
+use App\Services\AfdParser;
 use Tests\TestCase;
 
 /*
@@ -48,4 +51,29 @@ expect()->extend('toBeOne', function () {
 function something()
 {
     // ..
+}
+
+/**
+ * Registra marcações do AFD como pendências históricas conhecidas (`pending`), como o
+ * lote de registro da correção histórica: o importador legado não as gravou (pulo das
+ * primeiras linhas ou posição do trailer de uma execução anterior).
+ *
+ * @param  list<int>  $nsrs
+ */
+function registerHistoricalPendings(string $path, array $nsrs, string $classification = 'X'): void
+{
+    $lines = app(AfdLegacyAlignment::class)->readLines($path);
+    $repSerial = app(AfdParser::class)->parse($lines[1], 1)->repSerial;
+
+    foreach ($nsrs as $nsr) {
+        $lineNumber = collect($lines)->search(fn (string $line, int $number) => $number > 1 && substr($line, 9, 1) === '3' && (int) substr($line, 0, 9) === $nsr);
+
+        AfdHistoricalNsr::factory()->create([
+            'rep_serial' => $repSerial,
+            'nsr' => $nsr,
+            'afd_line' => $lineNumber,
+            'afd_line_sha256' => hash('sha256', $lines[$lineNumber]),
+            'classification' => $classification,
+        ]);
+    }
 }

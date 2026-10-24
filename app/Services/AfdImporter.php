@@ -4,8 +4,10 @@ namespace App\Services;
 
 use App\Enums\AfdRecordType;
 use App\Enums\AfdRejectionReason;
+use App\Models\AfdHistoricalNsr;
 use App\Models\AfdImport;
 use App\Models\AfdImportRejection;
+use App\Models\AfdPointQuarantine;
 use App\Models\AfdRep;
 use App\Models\ImportedLines;
 use App\Models\Point;
@@ -17,6 +19,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use PDOException;
 
 /**
@@ -29,9 +32,16 @@ use PDOException;
  *    arquivo inteiro.
  * 2. Numa única transação, com a linha do REP em `afd_reps` bloqueada (lockForUpdate):
  *    cursor (maior NSR já examinado) ou transição do controle legado `imported_lines`;
- *    gravação somente das marcações (tipo 3) válidas com NSR acima do cursor;
+ *    cobertura individual dos NSRs até o cursor (AfdNsrCoverage): lacuna não explicada
+ *    ou inconsistência recusa o arquivo; gravação somente das marcações (tipo 3) válidas com NSR acima do cursor;
  *    marcações inválidas em `afd_import_rejections` (NSR e motivo); registro da
  *    importação e avanço do cursor. Qualquer falha desfaz tudo.
+ * 3. Retenção por decisão do RH (`afd_historical_nsrs`, classificação R, estado
+ *    `withheld`, registrada antes pela ação `withhold`): a marcação com NSR acima do
+ *    cursor não é gravada nem rejeitada; conta só em `withheld`, depois de conferidas a
+ *    linha e o SHA-256 da linha com o registro (divergência recusa o arquivo inteiro). O
+ *    cursor avança sobre ela normalmente; nas importações seguintes ela fica abaixo do
+ *    cursor (`already_processed`) e nunca é gravada.
  *
  * Duplicidade é tratada explicitamente, sem INSERT IGNORE: antes de cada lote, os NSRs
  * do REP já gravados (em `points` ou em `afd_import_rejections`) são consultados e
@@ -55,32 +65,32 @@ class AfdImporter
     /**
      * O importador legado pulava as 9 primeiras linhas quando `imported_lines` estava vazia.
      */
-    private const LEGACY_INITIAL_SKIP = 9;
+    public const LEGACY_INITIAL_SKIP = 9;
 
     public const FAILURE_MESSAGE = 'Não foi possível concluir a importação do AFD. Nenhuma alteração foi confirmada. Consulte os logs técnicos.';
 
     public const CONCURRENCY_MESSAGE = 'Outra operação gravou marcações deste relógio durante a importação. Nenhuma alteração foi confirmada; repita a importação.';
 
-    public function __construct(private AfdParser $parser) {}
+    public function __construct(private AfdParser $parser, private AfdNsrCoverage $coverage) {}
 
     /**
      * @return array{
      *     import_id: int, transition: ?string, legacy_line_number: ?int, cursor_before: int, cursor_after: int,
      *     max_nsr: ?int, max_valid_punch_nsr: ?int, max_imported_nsr: ?int,
-     *     imported: int, existing: int, already_processed: int, rejected: int,
+     *     imported: int, existing: int, already_processed: int, rejected: int, withheld: int,
      *     rejections_already_recorded: int, manual_coincidences: int,
-     *     rejections: list<array{nsr: int, reason: string}>,
+     *     rejections: list<array{nsr: int, reason: string}>, withheld_nsrs: list<int>,
      *     ignored: array{header: int, company: int, clock_adjustment: int, employee: int, trailer: int}
      * }
      *
      * @throws DomainException
      */
-    public function import(string $path, ?int $userId = null): array
+    public function import(string $path, ?int $userId = null, ?string $operator = null): array
     {
         $scan = $this->scan($path);
 
         try {
-            return DB::transaction(fn () => $this->persist($path, $scan, $userId));
+            return DB::transaction(fn () => $this->persist($path, $scan, $userId, $operator));
         } catch (QueryException|PDOException $exception) {
             Log::error('Falha de banco na importação do AFD; nenhuma alteração foi confirmada.', [
                 'exception' => $exception::class,
@@ -209,25 +219,21 @@ class AfdImporter
      * @param  array<string, mixed>  $scan
      * @return array<string, mixed>
      */
-    private function persist(string $path, array $scan, ?int $userId): array
+    private function persist(string $path, array $scan, ?int $userId, ?string $operator): array
     {
         $created = AfdRep::query()->createOrFirst(['rep_serial' => $scan['rep_serial']]);
         $rep = AfdRep::query()->whereKey($created->id)->lockForUpdate()->firstOrFail();
 
-        $start = $rep->processed_to_nsr !== null
-            ? ['cursor' => $rep->processed_to_nsr, 'transition' => null, 'legacy_line_number' => null, 'legacy_checked' => 0, 'legacy_confirmed' => 0]
-            : $this->startingPoint($path, $scan);
+        $start = $this->startFor($rep, $path, $scan);
         $cursor = $start['cursor'];
-
-        if (($scan['max_nsr'] ?? 0) < $cursor) {
-            throw $this->refused('o arquivo termina no NSR '.($scan['max_nsr'] ?? 0).', antes do último NSR já processado deste relógio ('.$cursor.'). Use o AFD completo mais recente');
-        }
-
-        if ($scan['first_nsr'] !== null && $scan['first_nsr'] > $cursor + 1) {
-            throw $this->refused('o arquivo começa no NSR '.$scan['first_nsr'].' e o último NSR processado deste relógio é '.$cursor.': faltariam registros entre eles');
-        }
-
         $cursorAfter = max($cursor, $scan['max_nsr'] ?? 0);
+        $coverage = $this->coverage->evaluate($path, $scan['rep_serial'], $rep->id, $cursor);
+
+        if ($coverage['blocking']) {
+            throw $this->refused($coverage['counts']['gap'].' marcação(ões) até o cursor '.$cursor.' sem cobertura (importada, rejeitada, comprovada no legado, pendência histórica ou decisão do RH) e '.count($coverage['inconsistencies']).' inconsistência(s) na cobertura. Execute a pré-validação para o detalhe');
+        }
+
+        $withheld = $this->withheldAhead($scan['rep_serial'], $cursor, true);
 
         $import = new AfdImport([
             'file_hash' => $scan['file_hash'],
@@ -251,13 +257,15 @@ class AfdImporter
         ]);
         $import->rep()->associate($rep);
         $import->user_id = $userId;
+        $import->operator = $operator;
         $import->save();
 
-        $totals = ['imported' => 0, 'existing' => 0, 'already_processed' => 0, 'rejected' => 0];
+        $totals = ['imported' => 0, 'existing' => 0, 'already_processed' => 0, 'rejected' => 0, 'withheld' => 0];
         $rejectionsAlreadyRecorded = 0;
         $manualCoincidences = [];
         $points = [];
         $rejections = [];
+        $withheldNsrs = [];
         $now = now();
 
         foreach ($this->lines($path) as $lineNumber => $line) {
@@ -273,6 +281,19 @@ class AfdImporter
 
             if ($record->nsr <= $cursor) {
                 $totals['already_processed']++;
+
+                continue;
+            }
+
+            if ($withheld->has($record->nsr)) {
+                $problem = $this->coverage->withheldProblem($withheld->get($record->nsr), $this->parser->withoutTerminator($line), $lineNumber);
+
+                if ($problem !== null) {
+                    throw $this->refused('NSR '.$record->nsr.' retido por decisão do RH: '.$problem);
+                }
+
+                $totals['withheld']++;
+                $withheldNsrs[] = $record->nsr;
 
                 continue;
             }
@@ -333,6 +354,7 @@ class AfdImporter
             'rejections_already_recorded' => $rejectionsAlreadyRecorded,
             'manual_coincidences' => count($manualCoincidences),
             'rejections' => array_map(fn (array $row) => ['nsr' => $row['nsr'], 'reason' => $row['reason']], $rejections),
+            'withheld_nsrs' => $withheldNsrs,
             'ignored' => [
                 'header' => 1,
                 'company' => $scan['counts']['company'],
@@ -356,12 +378,7 @@ class AfdImporter
      */
     private function insertPoints(array $rows, AfdRep $rep, array &$totals, array &$manualCoincidences): void
     {
-        $stored = Point::query()->toBase()
-            ->where('rep_serial', $rep->rep_serial)
-            ->whereIn('nsr', array_column($rows, 'nsr'))
-            ->pluck('nsr')
-            ->map(fn ($nsr) => (int) $nsr)
-            ->flip();
+        $stored = $this->storedNsrs($rep->rep_serial, array_column($rows, 'nsr'));
         $new = array_values(array_filter($rows, fn (array $row) => ! $stored->has($row['nsr'])));
 
         $totals['existing'] += count($rows) - count($new);
@@ -388,12 +405,7 @@ class AfdImporter
      */
     private function insertRejections(array $rows, AfdRep $rep): int
     {
-        $recorded = AfdImportRejection::query()->toBase()
-            ->where('afd_rep_id', $rep->id)
-            ->whereIn('nsr', array_column($rows, 'nsr'))
-            ->pluck('nsr')
-            ->map(fn ($nsr) => (int) $nsr)
-            ->flip();
+        $recorded = $this->recordedRejectionNsrs($rep->id, array_column($rows, 'nsr'));
         $new = array_values(array_filter($rows, fn (array $row) => ! $recorded->has($row['nsr'])));
 
         if ($new !== []) {
@@ -420,6 +432,89 @@ class AfdImporter
     }
 
     /**
+     * Ponto de partida da importação: o cursor do REP, quando já existe, ou a transição
+     * definida por startingPoint(); recusa o arquivo que termina antes do cursor ou que
+     * deixaria registros faltando depois dele. Somente leitura. Usado pela importação,
+     * com o REP travado, e pela pré-validação (AfdPrecheck), sem trava.
+     *
+     * @param  array<string, mixed>  $scan
+     * @return array{cursor: int, transition: ?string, legacy_line_number: ?int, legacy_checked: int, legacy_confirmed: int}
+     *
+     * @throws DomainException
+     */
+    public function startFor(?AfdRep $rep, string $path, array $scan): array
+    {
+        $start = $rep?->processed_to_nsr !== null
+            ? ['cursor' => $rep->processed_to_nsr, 'transition' => null, 'legacy_line_number' => null, 'legacy_checked' => 0, 'legacy_confirmed' => 0]
+            : $this->startingPoint($path, $scan);
+        $cursor = $start['cursor'];
+
+        if (($scan['max_nsr'] ?? 0) < $cursor) {
+            throw $this->refused('o arquivo termina no NSR '.($scan['max_nsr'] ?? 0).', antes do último NSR já processado deste relógio ('.$cursor.'). Use o AFD completo mais recente');
+        }
+
+        if ($scan['first_nsr'] !== null && $scan['first_nsr'] > $cursor + 1) {
+            throw $this->refused('o arquivo começa no NSR '.$scan['first_nsr'].' e o último NSR processado deste relógio é '.$cursor.': faltariam registros entre eles');
+        }
+
+        return $start;
+    }
+
+    /**
+     * Retenções do REP por decisão do RH (estado `withheld`) com NSR acima do cursor:
+     * NSR => registro. Somente leitura; com trava na importação.
+     *
+     * @return Collection<int, AfdHistoricalNsr>
+     */
+    public function withheldAhead(string $repSerial, int $cursor, bool $lock = false): Collection
+    {
+        if (! Schema::hasTable('afd_historical_nsrs')) {
+            return collect();
+        }
+
+        return AfdHistoricalNsr::query()
+            ->where('rep_serial', $repSerial)
+            ->where('status', AfdHistoricalNsr::STATUS_WITHHELD)
+            ->where('nsr', '>', $cursor)
+            ->when($lock, fn ($query) => $query->lockForUpdate())
+            ->get()
+            ->keyBy('nsr');
+    }
+
+    /**
+     * NSRs do REP, entre os informados, já gravados em `points`. Somente leitura.
+     *
+     * @param  list<int>  $nsrs
+     * @return Collection<int, int> NSR => posição, para consulta com has().
+     */
+    public function storedNsrs(string $repSerial, array $nsrs): Collection
+    {
+        return Point::query()->toBase()
+            ->where('rep_serial', $repSerial)
+            ->whereIn('nsr', $nsrs)
+            ->pluck('nsr')
+            ->map(fn ($nsr) => (int) $nsr)
+            ->flip();
+    }
+
+    /**
+     * NSRs do REP, entre os informados, já registrados em `afd_import_rejections`.
+     * Somente leitura.
+     *
+     * @param  list<int>  $nsrs
+     * @return Collection<int, int> NSR => posição, para consulta com has().
+     */
+    public function recordedRejectionNsrs(int $repId, array $nsrs): Collection
+    {
+        return AfdImportRejection::query()->toBase()
+            ->where('afd_rep_id', $repId)
+            ->whereIn('nsr', $nsrs)
+            ->pluck('nsr')
+            ->map(fn ($nsr) => (int) $nsr)
+            ->flip();
+    }
+
+    /**
      * G1: ids das batidas manuais com o mesmo PIS, data e minuto de alguma marcação do
      * lote. A unidade é a batida manual: cada uma conta uma vez, mesmo que coincida com
      * várias marcações. Somente leitura; nada é alterado.
@@ -427,7 +522,7 @@ class AfdImporter
      * @param  list<array<string, mixed>>  $rows
      * @return list<int>
      */
-    private function manualCoincidences(array $rows): array
+    public function manualCoincidences(array $rows): array
     {
         $keys = collect($rows)->mapWithKeys(fn (array $row) => [$this->legacyKey($row['date'], $row['time'], (string) $row['pis']) => true]);
 
@@ -558,7 +653,9 @@ class AfdImporter
     }
 
     /**
-     * Quantidade de batidas gravadas pelo importador legado (sem NSR) por chave legada.
+     * Quantidade de batidas gravadas pelo importador legado (sem NSR) por chave legada,
+     * inclusive as em quarentena (`afd_point_quarantines`), para que a conferência da
+     * transição não mude com a quarentena, como na prova posicional (AfdLegacyAlignment).
      *
      * @param  Collection<int, string>  $keys
      * @return array<string, int>
@@ -573,17 +670,29 @@ class AfdImporter
             return [];
         }
 
-        Point::query()->toBase()->where('type', 'importado')->whereNull('nsr')
-            ->whereIn('pis', $parts->map(fn (array $part) => (int) $part[2])->unique()->values())
-            ->where(fn ($query) => $parts->pluck(0)->unique()->each(fn (string $date) => $query->orWhereDate('date', $date)))
-            ->get(['date', 'time', 'pis'])
-            ->each(function (object $point) use ($wanted, &$counts) {
-                $key = $this->legacyKey((string) $point->date, (string) $point->time, (string) $point->pis);
+        $count = function (object $point) use ($wanted, &$counts) {
+            $key = $this->legacyKey((string) $point->date, (string) $point->time, (string) $point->pis);
 
-                if ($wanted->has($key)) {
-                    $counts[$key] = ($counts[$key] ?? 0) + 1;
-                }
-            });
+            if ($wanted->has($key)) {
+                $counts[$key] = ($counts[$key] ?? 0) + 1;
+            }
+        };
+        $pis = $parts->map(fn (array $part) => (int) $part[2])->unique()->values();
+        $dates = fn ($query) => $parts->pluck(0)->unique()->each(fn (string $date) => $query->orWhereDate('date', $date));
+
+        Point::query()->toBase()->where('type', 'importado')->whereNull('nsr')
+            ->whereIn('pis', $pis)->where($dates)
+            ->get(['date', 'time', 'pis'])
+            ->each($count);
+
+        if (Schema::hasTable('afd_point_quarantines')) {
+            AfdPointQuarantine::query()->toBase()
+                ->where('status', AfdPointQuarantine::STATUS_QUARANTINED)
+                ->where('type', 'importado')->whereNull('nsr')
+                ->whereIn('pis', $pis)->where($dates)
+                ->get(['date', 'time', 'pis'])
+                ->each($count);
+        }
 
         return $counts;
     }

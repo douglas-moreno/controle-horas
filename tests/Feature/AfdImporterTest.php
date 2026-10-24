@@ -225,10 +225,13 @@ describe('cumulative imports', function () {
 
     test('a partial file that continues the last processed nsr is accepted', function () {
         AfdRep::factory()->processedTo(7)->create(['rep_serial' => AfdFileBuilder::REP_SERIAL]);
+        DB::table('points')->insert(collect([6 => '2026-09-14', 7 => '2026-09-15'])->map(fn (string $date, int $nsr) => [
+            'pis' => 12345678901, 'date' => $date, 'time' => '08:12:00', 'type' => 'importado', 'rep_serial' => AfdFileBuilder::REP_SERIAL, 'nsr' => $nsr, 'created_at' => now(), 'updated_at' => now(),
+        ])->values()->all());
 
         $result = $this->importer->import(AfdFileBuilder::make()->startingAt(6)->punch(AFD_PIS_A, '14092026', '0812')->punch(AFD_PIS_A, '15092026', '0812')->punch(AFD_PIS_A, '16092026', '0812')->write());
 
-        expect(Point::query()->orderBy('nsr')->pluck('nsr')->all())->toBe([8])
+        expect(Point::query()->orderBy('nsr')->pluck('nsr')->all())->toBe([6, 7, 8])
             ->and($result)->toMatchArray(['already_processed' => 2, 'imported' => 1]);
     });
 
@@ -567,8 +570,9 @@ describe('legacy transition', function () {
         ($this->legacyImport)($first->write());
         $legacyPoints = Point::count();
 
-        $second = ($this->afd)(2, $first);
-        $result = $this->importer->import($second->write());
+        $path = ($this->afd)(2, $first)->write();
+        registerHistoricalPendings($path, range(1, 8));
+        $result = $this->importer->import($path);
         $import = AfdImport::sole();
 
         expect(ImportedLines::max('line_number'))->toBe(17)
@@ -590,12 +594,15 @@ describe('legacy transition', function () {
     test('positions lost by earlier legacy imports are expected to be missing', function () {
         $first = ($this->afd)(15, AfdFileBuilder::make());
         ($this->legacyImport)($first->write());
+        $this->travel(1)->minute();
         $second = ($this->afd)(3, $first);
         ($this->legacyImport)($second->write());
 
         expect(ImportedLines::query()->orderBy('id')->pluck('line_number')->all())->toBe([17, 20]);
 
-        $result = $this->importer->import(($this->afd)(1, $second)->write());
+        $path = ($this->afd)(1, $second)->write();
+        registerHistoricalPendings($path, [...range(1, 8), 16]);
+        $result = $this->importer->import($path);
 
         expect($result)->toMatchArray(['cursor_before' => 18, 'imported' => 1])
             ->and(AfdImport::sole()->legacy_checked)->toBe(9)
@@ -662,7 +669,7 @@ describe('legacy transition', function () {
     test('the legacy evidence reads only the exact dates and the pis it needs, without hydrating models', function () {
         $first = ($this->afd)(15, AfdFileBuilder::make()->clockAdjustment('010120100800', '010120100805'));
         ($this->legacyImport)($first->write());
-        DB::table('points')->insert(collect(range(1, 30))->map(fn (int $day) => ['pis' => 99999999999, 'date' => sprintf('2025-06-%02d', $day), 'time' => '08:00:00', 'type' => 'importado', 'created_at' => now(), 'updated_at' => now()])->all());
+        DB::table('points')->insert(collect(range(1, 30))->map(fn (int $day) => ['pis' => 99999999999, 'date' => sprintf('2025-06-%02d', $day), 'time' => '08:00:00', 'type' => 'importado', 'created_at' => now()->addHour(), 'updated_at' => now()->addHour()])->all());
         $evidence = [];
         DB::listen(function (QueryExecuted $query) use (&$evidence) {
             if (str_contains(strtolower($query->sql), 'type') && str_contains(strtolower($query->sql), 'nsr') && str_contains(strtolower($query->sql), 'is null') && str_starts_with(strtolower(ltrim($query->sql)), 'select')) {
@@ -670,8 +677,10 @@ describe('legacy transition', function () {
             }
         });
 
-        $result = $this->importer->import(($this->afd)(2, $first)->write());
-        $query = collect($evidence)->last();
+        $path = ($this->afd)(2, $first)->write();
+        registerHistoricalPendings($path, range(2, 8));
+        $result = $this->importer->import($path);
+        $query = collect($evidence)->first();
 
         expect($result)->toMatchArray(['transition' => AfdImport::TRANSITION_LEGACY, 'cursor_before' => 16, 'imported' => 2])
             ->and(strtolower($query->sql))->not->toContain('>=')
@@ -684,8 +693,10 @@ describe('legacy transition', function () {
         $first = ($this->afd)(15, AfdFileBuilder::make());
         ($this->legacyImport)($first->write());
         $tamper();
+        $path = ($this->afd)(2, $first)->write();
+        registerHistoricalPendings($path, range(1, 8));
 
-        $import = fn () => $this->importer->import(($this->afd)(2, $first)->write());
+        $import = fn () => $this->importer->import($path);
 
         if ($refusal === null) {
             expect($import()['cursor_before'])->toBe(15);
@@ -707,7 +718,9 @@ describe('legacy transition', function () {
         $first = ($this->afd)(15, AfdFileBuilder::make());
         ($this->legacyImport)($first->write());
         $second = ($this->afd)(2, $first);
-        $this->importer->import($second->write());
+        $path = $second->write();
+        registerHistoricalPendings($path, range(1, 8));
+        $this->importer->import($path);
         ImportedLines::create(['line_number' => 999]);
 
         $result = $this->importer->import(($this->afd)(1, $second)->write());

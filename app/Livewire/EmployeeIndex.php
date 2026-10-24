@@ -127,6 +127,10 @@ class EmployeeIndex extends Component
             $lines[] = $result['rejected'].' marcação(ões) inválida(s), não importada(s): NSR '.$nsrs.($result['rejected'] > 20 ? '…' : '').'.';
         }
 
+        if ($result['withheld'] > 0) {
+            $lines[] = $result['withheld'].' marcação(ões) retida(s) por decisão do RH, não importada(s): NSR '.implode(', ', array_slice($result['withheld_nsrs'], 0, 20)).'.';
+        }
+
         if ($result['transition'] === AfdImport::TRANSITION_LEGACY) {
             $lines[] = 'Transição do controle legado: última importação anterior até a linha '.$result['legacy_line_number'].'; importação a partir do NSR '.($result['cursor_before'] + 1).'.';
         }
