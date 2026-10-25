@@ -8,6 +8,7 @@ use App\Enums\BenefitPeriodStatus;
 use App\Enums\CalendarDayType;
 use App\Enums\TimesheetDayStatus;
 use App\Models\AfdCorrectionBatch;
+use App\Models\AfdDecisionApproval;
 use App\Models\AfdHistoricalNsr;
 use App\Models\AfdHistoricalNsrDecision;
 use App\Models\AfdRecoveredPoint;
@@ -16,6 +17,7 @@ use App\Models\BenefitPeriod;
 use App\Models\BenefitPeriodEmployee;
 use App\Models\Employee;
 use App\Models\Point;
+use App\Models\User;
 use Carbon\CarbonImmutable;
 use Carbon\Exceptions\InvalidFormatException;
 use DomainException;
@@ -161,7 +163,48 @@ class AfdHistoricalDecisions
     }
 
     /**
+     * Registra a aprovação do manifesto aprovado (`$contents`, exatamente o conteúdo do
+     * arquivo que será gerado) pelo usuário já autenticado. Confere a identidade do banco
+     * antes de gravar.
+     *
+     * @param  array<string, mixed>  $manifest
+     * @param  array<string, ?string>  $expected
+     *
+     * @throws DomainException
+     */
+    public function recordApproval(array $manifest, string $contents, User $approver, array $expected): AfdDecisionApproval
+    {
+        $target = $this->correction->assertTarget($expected);
+        $approvedFrom = $manifest['approved_from'] ?? [];
+
+        if (! AfdDecisionApproval::isAvailable()) {
+            throw new DomainException('Aprovação recusada: a tabela afd_decision_approvals não existe (migration pendente). Nada foi aprovado.');
+        }
+
+        if (($approvedFrom['approved_by']['user_id'] ?? null) !== $approver->id) {
+            throw new DomainException('Aprovação recusada: o manifesto não traz o aprovador autenticado. Nada foi aprovado.');
+        }
+
+        try {
+            return AfdDecisionApproval::query()->create([
+                'user_id' => $approver->id,
+                'approver_name' => $approver->name,
+                'approver_email' => $approver->email,
+                'manifest_sha256' => hash('sha256', $contents),
+                'source_manifest_sha256' => $approvedFrom['manifest_sha256'],
+                'preview_sha256' => $approvedFrom['preview_sha256'],
+                'rows' => count($manifest['rows']),
+                'target' => $target,
+                'approved_at' => $approvedFrom['approved_at'],
+            ]);
+        } catch (UniqueConstraintViolationException) {
+            throw new DomainException('Aprovação recusada: este manifesto aprovado já tem aprovação registrada. Nada foi aprovado.');
+        }
+    }
+
+    /**
      * Gravação das decisões do manifesto (recover, retain_manual, discard, defer e revoke).
+     * Exige aprovação registrada (recordApproval) para o SHA-256 exato do manifesto.
      *
      * @param  array{operator?: string, expected?: array<string, ?string>}  $apply
      * @return array<string, mixed>
@@ -179,6 +222,10 @@ class AfdHistoricalDecisions
 
         $target = $this->correction->assertTarget($apply['expected'] ?? []);
         $this->periodConflicts = [];
+
+        if (! AfdDecisionApproval::isAvailable()) {
+            throw new DomainException('Decisões recusadas: a tabela afd_decision_approvals não existe (migration pendente). Nada foi gravado.');
+        }
 
         return ['mode' => 'apply', 'target' => $target, ...DB::transaction(fn () => $this->persist($manifest, $manifestHash, $lines, $target, $operator))];
     }
@@ -228,6 +275,10 @@ class AfdHistoricalDecisions
         ]);
         $this->refuseUnless($report['status'] === self::STATUS_VALID, $problems->count().' problema(s): '.$problems->take(5)->implode('; '));
 
+        $approval = AfdDecisionApproval::query()->where('manifest_sha256', $manifestHash)->lockForUpdate()->first();
+        $this->refuseUnless($approval !== null, 'o manifesto não tem aprovação registrada (gere-o com afd:decisions approve, com o aprovador autenticado)');
+        $this->refuseUnless(AfdCorrectionBatch::query()->where('afd_decision_approval_id', $approval->id)->doesntExist(), 'a aprovação '.$approval->id.' já foi usada por outro lote');
+
         $removedIds = $revokedRecoveries->pluck('recovered_point_id')->map(fn ($id) => (int) $id)->values()->all();
         $before = $this->correction->pointsFingerprint($removedIds);
         $batch = AfdCorrectionBatch::query()->create([
@@ -238,6 +289,7 @@ class AfdHistoricalDecisions
             'rep_serial' => $manifest['rep_serial'],
             'expected_count' => $manifest['expected_count'],
             'target' => $target,
+            'afd_decision_approval_id' => $approval->id,
             'applied_by' => $operator,
             'applied_at' => now(),
         ]);
@@ -261,7 +313,7 @@ class AfdHistoricalDecisions
         );
         $batch->update(['applied_count' => count($rows)]);
 
-        return ['status' => 'applied', 'batch_id' => $batch->id, 'rows' => count($rows), 'by_decision' => $report['by_decision'], 'recovered_point_ids' => $recoveredIds, 'removed_point_ids' => $removedIds];
+        return ['status' => 'applied', 'batch_id' => $batch->id, 'approval_id' => $approval->id, 'approved_by' => $approval->approver_name, 'rows' => count($rows), 'by_decision' => $report['by_decision'], 'recovered_point_ids' => $recoveredIds, 'removed_point_ids' => $removedIds];
     }
 
     /**

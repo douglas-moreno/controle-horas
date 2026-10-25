@@ -51,6 +51,7 @@ Essa proteção vale para o Eloquent. Comandos SQL diretos não passam por ela (
 ### Outras alterações
 - `afd_recovered_points.afd_historical_nsr_decision_id` (nulo, FK): liga uma recuperação futura à decisão que a autorizou. É nulo nas recuperações dos lotes de correção.
 - `AfdCorrectionBatch::KIND_DECISION = 'decision'`.
+- `afd_decision_approvals` (append-only) e `afd_correction_batches.afd_decision_approval_id` (nulo, FK única): aprovação autenticada do manifesto e o lote que ela autorizou (seção 5e).
 - `AfdHistoricalNsr::decisions()` e `activeDecision()`.
 - O registro principal (`afd_historical_nsrs`) continua sendo o estado atual que a cobertura de NSR (`AfdNsrCoverage`) lê. A F2 o atualizará a partir da decisão ativa.
 
@@ -224,7 +225,7 @@ Fluxo completo, sempre com arquivos novos (nenhuma saída sobrescreve um arquivo
 afd:decisions convert --matrix=matriz.csv --afd=AFD.txt --output=manifesto.json [--classes=E2a --employees=154 --timezone=America/Sao_Paulo]
 afd:decisions preview --manifest=manifesto.json --afd=AFD.txt --output=simulacao.json --report=relatorio.md
   (o RH lê relatorio.md; se faltar confirmar avisos ou corrigir algo, corrige a matriz e repete convert + preview)
-afd:decisions approve --manifest=manifesto.json --preview=simulacao.json --output=aprovado.json
+afd:decisions approve --manifest=manifesto.json --preview=simulacao.json --output=aprovado.json --approver=<e-mail do aprovador> --expect-host=… --expect-server-uuid=… --expect-database=…
 afd:decisions apply --manifest=aprovado.json --afd=AFD.txt --operator=… --expect-host=… --expect-server-uuid=… --expect-database=…
 ```
 
@@ -240,7 +241,7 @@ afd:decisions apply --manifest=aprovado.json --afd=AFD.txt --operator=… --expe
 
 **`preview --report`:** relatório em Markdown, sem PIS (funcionário pelo id interno), com: resultado geral; contagens; por linha, a referência da matriz, a classe e a situação atual, a decisão e os dados do RH, as recusas, a consequência (efeito nos pontos, espelho do dia antes e depois, competência e participação, ajustes e conflitos antes e depois), cada aviso com o texto explicativo e se foi confirmado, e o hash da consequência. `--output` grava a simulação em JSON.
 
-**`approve`** (não acessa o banco): exige que a simulação salva seja do mesmo manifesto (SHA-256), do mesmo AFD e REP, com o mesmo número e ordem de NSR, e com resultado `valid` (sem recusa e com todos os avisos confirmados). Copia o `consequence_sha256` de cada linha para `expected_consequence_sha256` e registra `approved_from` (SHA-256 do manifesto e da simulação). Um manifesto que já traz consequência aprovada é recusado. Se o estado mudar entre a simulação e a gravação, o `apply` recusa (seção 5a).
+**`approve`**: autentica o aprovador — `--approver` é o e-mail de um usuário do sistema, e a senha dele é pedida sem eco (não funciona com `--no-interaction`; e-mail ou senha errados recusam sem gravar nada). Exige que a simulação salva seja do mesmo manifesto (SHA-256), do mesmo AFD e REP, com o mesmo número e ordem de NSR, e com resultado `valid` (sem recusa e com todos os avisos confirmados). Copia o `consequence_sha256` de cada linha para `expected_consequence_sha256` e registra `approved_from` (SHA-256 do manifesto e da simulação). `approved_from` também leva o aprovador (`approved_by`: id, nome e e-mail) e `approved_at`. Depois de conferir a identidade do banco, grava a aprovação em `afd_decision_approvals` (append-only: usuário, nome e e-mail copiados, SHA-256 do manifesto aprovado, do manifesto de origem e da simulação, número de linhas, identidade do banco e momento) e só então gera o arquivo. Um manifesto que já traz consequência aprovada é recusado. O `apply` só grava um manifesto cujo SHA-256 exato tenha aprovação registrada e ainda não usada; o lote guarda `afd_decision_approval_id`. Editar o arquivo aprovado (inclusive o aprovador) muda o SHA-256 e faz o `apply` recusar. Se o estado mudar entre a simulação e a gravação, o `apply` recusa (seção 5a).
 
 ## 5f. Anotações sobre pontos importados (F7)
 
@@ -298,7 +299,7 @@ A proposta inicial abaixo **ainda precisa ser confirmada** antes da fase que imp
 - **Ajuste dependente do dia:** a regra considera só ajustes `confirmed` do funcionário cujo intervalo contém o dia. Não há vínculo explícito entre ajuste e batida.
 - **Concorrência na recuperação:** a regra de mesmo PIS, data e minuto é conferida dentro da transação, sem trava das batidas do dia. O NSR é protegido pelo índice único. Para garantir o resultado, rode com a manutenção ativa ou sem uso concorrente da tela de pontos.
 - **Ponto manual mantido:** protegido na aplicação desde a F3 (seção 5b). Uma exclusão direta no banco não é impedida.
-- **Aprovação do relatório pelo RH:** não fica registrada no sistema; o que fica é a cadeia de SHA-256 (matriz → manifesto → simulação → manifesto aprovado, em `approved_from`). Guarde o relatório aprovado junto com a evidência. Editar a simulação salva não permite gravar nada diferente: o `apply` recalcula tudo e compara.
+- **Aprovação do relatório pelo RH:** registrada em `afd_decision_approvals` com o usuário autenticado no `approve`, ligada ao lote gravado. O sistema não tem papéis: qualquer usuário cadastrado pode aprovar, e o aprovador digita a senha no terminal do operador. Guarde o relatório aprovado junto com a evidência. Editar a simulação salva não permite gravar nada diferente: o `apply` recalcula tudo e compara.
 - **Relatório:** Markdown (texto). Não há PDF nem planilha de saída.
 - **Lotes antigos:** os lotes 1 a 3 e as 146 linhas do lote 1 não são alterados por esta fase.
 

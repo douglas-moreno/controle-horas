@@ -1,10 +1,12 @@
 <?php
 
 use App\Models\AfdCorrectionBatch;
+use App\Models\AfdDecisionApproval;
 use App\Models\AfdHistoricalNsr;
 use App\Models\AfdHistoricalNsrDecision;
 use App\Models\Employee;
 use App\Models\Point;
+use App\Models\User;
 use App\Services\AfdDecisionMatrix;
 use App\Services\AfdHistoricalCorrection;
 use App\Services\AfdHistoricalDecisions;
@@ -250,15 +252,37 @@ describe('approval and the whole flow', function () {
         $identity = ['--expect-host' => $this->apply['expected']['hostname'], '--expect-server-uuid' => $this->apply['expected']['server_uuid'], '--expect-database' => $this->apply['expected']['database']];
 
         expect(Artisan::call('afd:decisions', ['action' => 'convert', '--matrix' => $csv, '--afd' => $this->scenario->path, '--output' => ($this->path)('manifesto.json')]))->toBe(0)
-            ->and(Artisan::call('afd:decisions', ['action' => 'preview', '--manifest' => ($this->path)('manifesto.json'), '--afd' => $this->scenario->path, '--output' => ($this->path)('simulacao.json'), '--report' => ($this->path)('relatorio.md')]))->toBe(0)
-            ->and(Artisan::call('afd:decisions', ['action' => 'approve', '--manifest' => ($this->path)('manifesto.json'), '--preview' => ($this->path)('simulacao.json'), '--output' => ($this->path)('aprovado.json')]))->toBe(0)
-            ->and(Artisan::call('afd:decisions', ['action' => 'apply', '--manifest' => ($this->path)('aprovado.json'), '--afd' => $this->scenario->path, '--operator' => 'ensaio', ...$identity]))->toBe(0);
+            ->and(Artisan::call('afd:decisions', ['action' => 'preview', '--manifest' => ($this->path)('manifesto.json'), '--afd' => $this->scenario->path, '--output' => ($this->path)('simulacao.json'), '--report' => ($this->path)('relatorio.md')]))->toBe(0);
+
+        $approver = User::factory()->create(['name' => 'Aprovadora do RH', 'email' => 'aprovadora@example.com']);
+        $this->artisan('afd:decisions', ['action' => 'approve', '--manifest' => ($this->path)('manifesto.json'), '--preview' => ($this->path)('simulacao.json'), '--output' => ($this->path)('aprovado.json'), '--approver' => 'aprovadora@example.com', ...$identity])
+            ->expectsQuestion('Senha de aprovadora@example.com (aprovador)', 'password')
+            ->assertExitCode(0);
+        $approval = AfdDecisionApproval::query()->sole();
+
+        expect(Artisan::call('afd:decisions', ['action' => 'apply', '--manifest' => ($this->path)('aprovado.json'), '--afd' => $this->scenario->path, '--operator' => 'ensaio', ...$identity]))->toBe(0)
+            ->and(Artisan::output())->toContain('"approved_by": "Aprovadora do RH"');
 
         $preview = json_decode((string) file_get_contents(($this->path)('simulacao.json')), true);
         $approved = json_decode((string) file_get_contents(($this->path)('aprovado.json')), true);
 
         expect(array_column($approved['rows'], 'expected_consequence_sha256'))->toBe(array_column($preview['results'], 'consequence_sha256'))
-            ->and($approved['approved_from'])->toBe(['manifest_sha256' => hash_file('sha256', ($this->path)('manifesto.json')), 'preview_sha256' => hash_file('sha256', ($this->path)('simulacao.json'))])
+            ->and($approved['approved_from'])->toMatchArray([
+                'manifest_sha256' => hash_file('sha256', ($this->path)('manifesto.json')),
+                'preview_sha256' => hash_file('sha256', ($this->path)('simulacao.json')),
+                'approved_by' => ['user_id' => $approver->id, 'name' => 'Aprovadora do RH', 'email' => 'aprovadora@example.com'],
+            ])
+            ->and($approval->only(['user_id', 'approver_name', 'approver_email', 'manifest_sha256', 'source_manifest_sha256', 'preview_sha256', 'rows']))->toBe([
+                'user_id' => $approver->id,
+                'approver_name' => 'Aprovadora do RH',
+                'approver_email' => 'aprovadora@example.com',
+                'manifest_sha256' => hash_file('sha256', ($this->path)('aprovado.json')),
+                'source_manifest_sha256' => hash_file('sha256', ($this->path)('manifesto.json')),
+                'preview_sha256' => hash_file('sha256', ($this->path)('simulacao.json')),
+                'rows' => 2,
+            ])
+            ->and($approval->target)->toMatchArray($this->apply['expected'])
+            ->and(AfdCorrectionBatch::query()->where('kind', AfdCorrectionBatch::KIND_DECISION)->sole()->afd_decision_approval_id)->toBe($approval->id)
             ->and(file_get_contents(($this->path)('relatorio.md')))->toContain('Resultado geral: **válida (pode ser aprovada)**')
             ->and(collect(['manifesto.json', 'simulacao.json', 'relatorio.md', 'aprovado.json'])->map(fn (string $name) => substr(sprintf('%o', fileperms(($this->path)($name))), -3))->unique()->all())->toBe(['600'])
             ->and(AfdHistoricalNsr::query()->whereIn('nsr', [3, 5, 7])->orderBy('nsr')->pluck('status')->all())->toBe(['manual_retained', 'pending', 'recovered'])
@@ -268,7 +292,7 @@ describe('approval and the whole flow', function () {
     test('the approval is refused when the simulation does not back the manifest', function (Closure $files, string $message) {
         [$manifest, $preview] = $files($this);
 
-        expect(fn () => $this->matrix->approve($manifest, $preview))->toThrow(DomainException::class, $message);
+        expect(fn () => $this->matrix->approve($manifest, $preview, User::factory()->create()))->toThrow(DomainException::class, $message);
     })->with([
         'warnings not acknowledged' => [function ($test) {
             $manifest = LegacyAfdScenario::write(($test->convert)(($test->csv)([($test->line)(7, 'recuperar', ['evidencia_tipo' => 'termo', 'evidencia_referencia' => 'RH-1'])]))['manifest']);
@@ -289,7 +313,7 @@ describe('approval and the whole flow', function () {
         'an already approved manifest' => [function ($test) {
             $manifest = LegacyAfdScenario::write(($test->convert)(($test->csv)([($test->line)(7, 'adiar')]))['manifest']);
             $preview = LegacyAfdScenario::write($test->decisions->preview($manifest, $test->scenario->path));
-            $approved = LegacyAfdScenario::write($test->matrix->approve($manifest, $preview));
+            $approved = LegacyAfdScenario::write($test->matrix->approve($manifest, $preview, User::factory()->create()));
 
             return [$approved, LegacyAfdScenario::write($test->decisions->preview($approved, $test->scenario->path))];
         }, 'o manifesto já traz consequência aprovada'],
@@ -298,10 +322,55 @@ describe('approval and the whole flow', function () {
 
     test('a state change after the HR review makes the approved manifest be refused', function () {
         $manifest = LegacyAfdScenario::write(($this->convert)(($this->csv)([($this->line)(7, 'adiar')]))['manifest']);
-        $approved = LegacyAfdScenario::write($this->matrix->approve($manifest, LegacyAfdScenario::write($this->decisions->preview($manifest, $this->scenario->path))));
+        $approved = LegacyAfdScenario::write($this->matrix->approve($manifest, LegacyAfdScenario::write($this->decisions->preview($manifest, $this->scenario->path)), User::factory()->create()));
         Point::factory()->create(['pis' => 12345678901, 'date' => '2026-09-08', 'time' => '12:00:00']);
 
         expect(fn () => $this->decisions->apply($approved, $this->scenario->path, $this->apply))->toThrow(DomainException::class, 'NSR 7: consequência prevista diferente da aprovada na simulação (o estado mudou)');
+    });
+
+    test('the approval is refused without the approver authenticated or on another database', function (array $options, ?string $password, string $message) {
+        User::factory()->create(['email' => 'aprovadora@example.com']);
+        $manifest = LegacyAfdScenario::write(($this->convert)(($this->csv)([($this->line)(7, 'adiar')]))['manifest']);
+        $preview = LegacyAfdScenario::write($this->decisions->preview($manifest, $this->scenario->path));
+        $identity = ['--expect-host' => $this->apply['expected']['hostname'], '--expect-server-uuid' => $this->apply['expected']['server_uuid'], '--expect-database' => $this->apply['expected']['database']];
+        $command = $this->artisan('afd:decisions', ['action' => 'approve', '--manifest' => $manifest, '--preview' => $preview, '--output' => ($this->path)('aprovado.json'), ...$identity, ...$options]);
+
+        if ($password !== null) {
+            $command->expectsQuestion('Senha de '.($options['--approver'] ?? '').' (aprovador)', $password);
+        }
+
+        $command->expectsOutputToContain($message)->assertExitCode(1);
+
+        expect(AfdDecisionApproval::query()->count())->toBe(0)
+            ->and(file_exists(($this->path)('aprovado.json')))->toBeFalse();
+    })->with([
+        'wrong password' => [['--approver' => 'aprovadora@example.com'], 'errada', 'e-mail ou senha do aprovador inválidos'],
+        'unknown e-mail' => [['--approver' => 'outra@example.com'], 'password', 'e-mail ou senha do aprovador inválidos'],
+        'no approver' => [[], null, 'informe --approver'],
+        'no interaction' => [['--approver' => 'aprovadora@example.com', '--no-interaction' => true], null, 'rode sem --no-interaction'],
+        'another database' => [['--approver' => 'aprovadora@example.com', '--expect-database' => 'outro'], 'password', 'Banco de destino diferente do esperado (database)'],
+    ]);
+
+    test('recording is refused for a manifest without a registered approval', function (Closure $edit) {
+        $manifest = LegacyAfdScenario::write(($this->convert)(($this->csv)([($this->line)(7, 'adiar')]))['manifest']);
+        $approved = $this->matrix->approve($manifest, LegacyAfdScenario::write($this->decisions->preview($manifest, $this->scenario->path)), User::factory()->create());
+        $path = approveDecisionManifest(LegacyAfdScenario::write($approved));
+        $tampered = LegacyAfdScenario::write($edit($approved));
+
+        expect(hash_file('sha256', $tampered))->not->toBe(hash_file('sha256', $path))
+            ->and(fn () => $this->decisions->apply($tampered, $this->scenario->path, $this->apply))->toThrow(DomainException::class, 'o manifesto não tem aprovação registrada')
+            ->and(AfdCorrectionBatch::query()->where('kind', AfdCorrectionBatch::KIND_DECISION)->count())->toBe(0)
+            ->and(AfdHistoricalNsrDecision::query()->count())->toBe(0);
+    })->with([
+        'approver replaced in the file' => [fn (array $approved) => array_replace_recursive($approved, ['approved_from' => ['approved_by' => ['name' => 'Outra pessoa']]])],
+        'approval removed from the file' => [fn (array $approved) => array_diff_key($approved, ['approved_from' => true])],
+    ]);
+
+    test('the approval record cannot be edited or deleted', function () {
+        $approval = AfdDecisionApproval::factory()->create();
+
+        expect(fn () => $approval->update(['approver_name' => 'outra']))->toThrow(LogicException::class, 'append-only')
+            ->and(fn () => $approval->delete())->toThrow(LogicException::class, 'append-only');
     });
 
     test('no output file is ever overwritten', function (string $action, Closure $options) {

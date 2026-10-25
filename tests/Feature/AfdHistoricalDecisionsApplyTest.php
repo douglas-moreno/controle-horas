@@ -80,7 +80,7 @@ beforeEach(function () {
     $this->approved = function (array $rows): string {
         $preview = $this->decisions->preview(($this->write)($rows), $this->scenario->path);
 
-        return ($this->write)(array_map(fn (array $row, array $result) => [...$row, 'expected_consequence_sha256' => $result['consequence_sha256']], $rows, $preview['results']));
+        return approveDecisionManifest(($this->write)(array_map(fn (array $row, array $result) => [...$row, 'expected_consequence_sha256' => $result['consequence_sha256']], $rows, $preview['results'])));
     };
 
     $this->evidence = ['evidence_type' => 'memorando', 'evidence_reference' => 'RH-2026-001', 'evidence_sha256' => hash('sha256', 'documento')];

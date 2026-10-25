@@ -85,11 +85,13 @@ beforeEach(function () {
     $this->approved = function (array $rows, bool $acknowledge = true): string {
         $preview = $this->decisions->preview(($this->write)($rows), $this->scenario->path);
 
-        return ($this->write)(array_map(fn (array $row, array $result) => [
+        $path = ($this->write)(array_map(fn (array $row, array $result) => [
             ...$row,
             'expected_consequence_sha256' => $result['consequence_sha256'],
             ...($acknowledge ? ['acknowledged_warnings' => $result['warnings']] : []),
         ], $rows, $preview['results']));
+
+        return approveDecisionManifest($path);
     };
 
     $this->tables = fn (array $except = []): array => collect(Schema::getTableListing(schemaQualified: false))

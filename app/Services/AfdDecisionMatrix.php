@@ -8,6 +8,7 @@ use App\Enums\AfdRecordType;
 use App\Enums\BenefitPeriodStatus;
 use App\Enums\TimesheetDayStatus;
 use App\Models\AfdHistoricalNsrDecision;
+use App\Models\User;
 use Carbon\CarbonImmutable;
 use DateTimeZone;
 use DomainException;
@@ -191,13 +192,14 @@ class AfdDecisionMatrix
 
     /**
      * Manifesto aprovado: o da simulação salva, com o `expected_consequence_sha256` de cada
-     * linha copiado dela.
+     * linha copiado dela e, em `approved_from`, o aprovador (usuário do sistema já
+     * autenticado pelo comando) e o momento da aprovação.
      *
      * @return array<string, mixed>
      *
      * @throws DomainException
      */
-    public function approve(string $manifestPath, string $previewPath): array
+    public function approve(string $manifestPath, string $previewPath, User $approver): array
     {
         $contents = is_file($manifestPath) ? file_get_contents($manifestPath) : false;
         $manifest = $contents === false ? null : json_decode($contents, true);
@@ -239,7 +241,12 @@ class AfdDecisionMatrix
             throw new DomainException('Aprovação recusada: '.$refusal.'. Nada foi aprovado.');
         }
 
-        $manifest['approved_from'] = ['manifest_sha256' => hash('sha256', $contents), 'preview_sha256' => hash('sha256', $previewContents)];
+        $manifest['approved_from'] = [
+            'manifest_sha256' => hash('sha256', $contents),
+            'preview_sha256' => hash('sha256', $previewContents),
+            'approved_by' => ['user_id' => $approver->id, 'name' => $approver->name, 'email' => $approver->email],
+            'approved_at' => now()->toIso8601String(),
+        ];
 
         return $manifest;
     }

@@ -2,12 +2,14 @@
 
 namespace App\Console\Commands;
 
+use App\Models\User;
 use App\Services\AfdDecisionMatrix;
 use App\Services\AfdHistoricalDecisions;
 use DomainException;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Auth;
 use LogicException;
 
 /**
@@ -20,13 +22,15 @@ use LogicException;
  *   `approve`); com `--report`, grava o relatório legível para o RH (Markdown). Código de
  *   saída 0 quando válido e com todos os avisos confirmados; 1 em recusa, aviso não
  *   confirmado ou erro.
- * - `approve`: gera o manifesto aprovado (`--output`) com o hash da consequência de cada
- *   linha copiado da simulação salva (`--preview`), que precisa ser válida e do mesmo
- *   manifesto. Não acessa o banco.
+ * - `approve`: autentica o aprovador (`--approver`, e-mail de um usuário do sistema, e a
+ *   senha dele, pedida sem eco; não funciona com --no-interaction), gera o manifesto
+ *   aprovado (`--output`) com o hash da consequência de cada linha copiado da simulação
+ *   salva (`--preview`), que precisa ser válida e do mesmo manifesto, e registra a
+ *   aprovação (AfdDecisionApproval) no banco de identidade esperada.
  * - `apply`: grava as decisões `recover`, `retain_manual`, `discard`, `defer` e `revoke`;
- *   exige o responsável, a identidade esperada do banco e, em cada linha, o
- *   `expected_consequence_sha256` da simulação aprovada. Código de saída 0 em sucesso; 1 em
- *   recusa.
+ *   exige o responsável, a identidade esperada do banco, a aprovação registrada do
+ *   manifesto e, em cada linha, o `expected_consequence_sha256` da simulação aprovada.
+ *   Código de saída 0 em sucesso; 1 em recusa.
  *
  * Os arquivos gerados nunca sobrescrevem um existente e ficam legíveis só pelo dono.
  */
@@ -41,10 +45,11 @@ use LogicException;
     {--timezone=America/Sao_Paulo : Fuso das datas da matriz sem fuso explícito (convert)}
     {--classes= : Só estas classes, separadas por vírgula (convert)}
     {--employees= : Só estes funcionários (id interno), separados por vírgula (convert)}
+    {--approver= : E-mail do usuário do sistema que aprova; a senha é pedida (approve)}
     {--operator= : Responsável pela operação (obrigatório em apply)}
-    {--expect-host= : @@hostname esperado do banco (apply)}
-    {--expect-server-uuid= : @@server_uuid esperado do banco (apply)}
-    {--expect-database= : Nome esperado do banco (apply)}')]
+    {--expect-host= : @@hostname esperado do banco (approve, apply)}
+    {--expect-server-uuid= : @@server_uuid esperado do banco (approve, apply)}
+    {--expect-database= : Nome esperado do banco (approve, apply)}')]
 #[Description('Decisões do RH sobre pendências históricas do AFD: conversão da matriz, simulação, aprovação e gravação')]
 class AfdDecisionsCommand extends Command
 {
@@ -57,14 +62,10 @@ class AfdDecisionsCommand extends Command
             $report = match ($this->argument('action')) {
                 'convert' => $this->convert($matrix, $afd),
                 'preview' => $this->preview($decisions, $matrix, $manifest, $afd),
-                'approve' => $this->approve($matrix, $manifest),
+                'approve' => $this->approve($decisions, $matrix, $manifest),
                 'apply' => $decisions->apply($manifest, $afd, [
                     'operator' => (string) $this->option('operator'),
-                    'expected' => [
-                        'hostname' => $this->option('expect-host'),
-                        'server_uuid' => $this->option('expect-server-uuid'),
-                        'database' => $this->option('expect-database'),
-                    ],
+                    'expected' => $this->expected(),
                 ]),
                 default => throw new DomainException('Ação desconhecida: use convert, preview, approve ou apply.'),
             };
@@ -133,15 +134,53 @@ class AfdDecisionsCommand extends Command
     /**
      * @return array<string, mixed>
      */
-    private function approve(AfdDecisionMatrix $matrix, string $manifest): array
+    private function approve(AfdHistoricalDecisions $decisions, AfdDecisionMatrix $matrix, string $manifest): array
     {
         $output = (string) $this->option('output');
         $this->ensureNew($output);
 
-        $approved = $matrix->approve($manifest, (string) $this->option('preview'));
-        $sha = $matrix->writeNew($output, $this->json($approved));
+        $approver = $this->authenticatedApprover();
+        $approved = $matrix->approve($manifest, (string) $this->option('preview'), $approver);
+        $contents = $this->json($approved);
+        $approval = $decisions->recordApproval($approved, $contents, $approver, $this->expected());
+        $sha = $matrix->writeNew($output, $contents);
 
-        return ['status' => 'approved', 'output' => $output, 'manifest_sha256' => $sha, 'rows' => count($approved['rows']), 'approved_from' => $approved['approved_from']];
+        return ['status' => 'approved', 'output' => $output, 'manifest_sha256' => $sha, 'approval_id' => $approval->id, 'rows' => count($approved['rows']), 'approved_from' => $approved['approved_from']];
+    }
+
+    /**
+     * Usuário do sistema identificado por `--approver` e autenticado com a senha dele.
+     *
+     * @throws DomainException
+     */
+    private function authenticatedApprover(): User
+    {
+        $email = trim((string) $this->option('approver'));
+
+        if ($email === '' || ! $this->input->isInteractive()) {
+            throw new DomainException('Aprovação recusada: informe --approver (e-mail do aprovador) e rode sem --no-interaction para digitar a senha. Nada foi aprovado.');
+        }
+
+        $password = (string) $this->secret('Senha de '.$email.' (aprovador)');
+        $user = User::query()->where('email', $email)->first();
+
+        if ($user === null || ! Auth::guard('web')->validate(['email' => $email, 'password' => $password])) {
+            throw new DomainException('Aprovação recusada: e-mail ou senha do aprovador inválidos. Nada foi aprovado.');
+        }
+
+        return $user;
+    }
+
+    /**
+     * @return array{hostname: ?string, server_uuid: ?string, database: ?string}
+     */
+    private function expected(): array
+    {
+        return [
+            'hostname' => $this->option('expect-host'),
+            'server_uuid' => $this->option('expect-server-uuid'),
+            'database' => $this->option('expect-database'),
+        ];
     }
 
     private function ensureNew(string $path): void

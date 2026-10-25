@@ -5,6 +5,7 @@ namespace App\Models;
 use Database\Factories\AfdCorrectionBatchFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
@@ -46,6 +47,7 @@ class AfdCorrectionBatch extends Model
         'expected_count',
         'applied_count',
         'target',
+        'afd_decision_approval_id',
         'applied_by',
         'applied_at',
         'reverted_by',
@@ -64,6 +66,16 @@ class AfdCorrectionBatch extends Model
             'applied_at' => 'immutable_datetime',
             'reverted_at' => 'immutable_datetime',
         ];
+    }
+
+    /**
+     * Aprovação registrada que autorizou o lote (só nos lotes de decisões do RH).
+     *
+     * @return BelongsTo<AfdDecisionApproval, $this>
+     */
+    public function decisionApproval(): BelongsTo
+    {
+        return $this->belongsTo(AfdDecisionApproval::class, 'afd_decision_approval_id');
     }
 
     /**

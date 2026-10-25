@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\AfdDecisionApproval;
 use App\Models\AfdHistoricalNsr;
 use App\Models\Holiday;
 use App\Services\AfdLegacyAlignment;
@@ -76,4 +77,17 @@ function registerHistoricalPendings(string $path, array $nsrs, string $classific
             'classification' => $classification,
         ]);
     }
+}
+
+/**
+ * Registra a aprovação de um manifesto de decisões do RH já gravado em `$path`, como o
+ * `afd:decisions approve` com o aprovador autenticado, e devolve o caminho. Manifestos
+ * de conteúdo idêntico compartilham a aprovação.
+ */
+function approveDecisionManifest(string $path): string
+{
+    AfdDecisionApproval::query()->where('manifest_sha256', hash_file('sha256', $path))->exists()
+        || AfdDecisionApproval::factory()->forManifest($path)->create();
+
+    return $path;
 }
