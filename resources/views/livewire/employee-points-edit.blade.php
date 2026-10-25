@@ -18,7 +18,11 @@
                         />
                     </div>
                     <div>
-                        @if ($point->type!=='importado')
+                        @if (isset($annotationLabels[$point->id]))
+                            <span class="text-xs text-gray-500" title="{{ \App\Models\Point::ANNOTATED_BY_HR_MESSAGE }}">{{ $annotationLabels[$point->id] }}</span>
+                        @elseif (in_array($point->id, $retainedPointIds, true))
+                            <span class="text-xs text-gray-500" title="{{ \App\Models\Point::RETAINED_BY_HR_MESSAGE }}">Mantido pelo RH</span>
+                        @elseif ($point->type!=='importado')
                             <x-ui-button red sm wire:click="removePoint({{ $point->id }})" icon="trash" 
                                 class="hover:transition-all hover:duration-300 hover:scale-110"
                             />

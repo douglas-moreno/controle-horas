@@ -3,14 +3,31 @@
 namespace App\Models;
 
 use Database\Factories\PointFactory;
+use DomainException;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/**
+ * Batida do funcionário (`importado` do relógio ou `manual`).
+ *
+ * Batida manual mantida por decisão do RH sobre uma pendência histórica do AFD
+ * (`afd_historical_nsrs` em `manual_retained` apontando para ela) não pode ser excluída nem
+ * ter funcionário, data, horário ou tipo alterados: a cobertura de NSR exige que ela exista
+ * e, sem ela, as importações seguintes seriam bloqueadas. A decisão precisa ser revogada
+ * antes. O mesmo vale (também para REP e NSR) para o ponto referenciado por uma anotação
+ * ativa do RH sobre ponto importado (AfdPointDecision: desconsiderado, duplicado ou original
+ * de uma duplicada). A proteção vale para o Eloquent; exclusões diretas pelo query builder
+ * ou SQL não passam por ela.
+ */
 class Point extends Model
 {
     /** @use HasFactory<PointFactory> */
     use HasFactory;
+
+    public const RETAINED_BY_HR_MESSAGE = 'Este ponto manual foi mantido por decisão do RH sobre uma pendência histórica do AFD e não pode ser excluído nem alterado. A decisão precisa ser revogada antes.';
+
+    public const ANNOTATED_BY_HR_MESSAGE = 'Este ponto tem anotação do RH (desconsiderado ou batida duplicada) e não pode ser excluído nem alterado. A anotação precisa ser revogada antes.';
 
     protected $fillable = [
         'pis',
@@ -23,6 +40,47 @@ class Point extends Model
         'date' => 'date',
         'time' => 'datetime:H:i',
     ];
+
+    protected static function booted(): void
+    {
+        static::deleting(function (Point $point) {
+            if ($point->isRetainedByHrDecision()) {
+                throw new DomainException(self::RETAINED_BY_HR_MESSAGE);
+            }
+
+            if ($point->isAnnotatedByHr()) {
+                throw new DomainException(self::ANNOTATED_BY_HR_MESSAGE);
+            }
+        });
+
+        static::updating(function (Point $point) {
+            if ($point->isDirty(['pis', 'date', 'time', 'type']) && $point->isRetainedByHrDecision()) {
+                throw new DomainException(self::RETAINED_BY_HR_MESSAGE);
+            }
+
+            if ($point->isDirty(['pis', 'date', 'time', 'type', 'rep_serial', 'nsr']) && $point->isAnnotatedByHr()) {
+                throw new DomainException(self::ANNOTATED_BY_HR_MESSAGE);
+            }
+        });
+    }
+
+    /**
+     * Batida manual gravada mantida por decisão do RH (pendência em `manual_retained`).
+     */
+    public function isRetainedByHrDecision(): bool
+    {
+        return $this->exists
+            && $this->getOriginal('type', $this->type) === 'manual'
+            && AfdHistoricalNsr::query()->where('related_manual_point_id', $this->getKey())->where('status', AfdHistoricalNsr::STATUS_MANUAL_RETAINED)->exists();
+    }
+
+    /**
+     * Ponto gravado referenciado por uma anotação ativa do RH (AfdPointDecision).
+     */
+    public function isAnnotatedByHr(): bool
+    {
+        return $this->exists && AfdPointDecision::references((int) $this->getKey());
+    }
 
     public function employee(): BelongsTo
     {

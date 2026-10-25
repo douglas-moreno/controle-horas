@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Enums\CalendarDayType;
 use App\Enums\TimesheetDayStatus;
+use App\Models\AfdPointDecision;
 use App\Models\Employee;
 use App\Models\Holiday;
 use App\Models\Point;
@@ -40,7 +41,11 @@ use InvalidArgumentException;
  * `alternative`, calculada pelo AlternativeTimesheetRule a partir das marcações brutas
  * e do extra oficial do dia. Os campos oficiais não mudam; desligada, a chave não existe.
  *
- * Somente lê `points` e `holidays`; não grava nada.
+ * Anotações do RH sobre pontos importados (AfdPointDecision, ativas): cada dia traz em
+ * `hr_annotations` o horário e o rótulo dos pontos anotados ("16:30 Duplicada (RH)"). É
+ * só um marcador: o ponto continua contando em todos os cálculos.
+ *
+ * Somente lê `points`, `holidays` e `afd_point_decisions`; não grava nada.
  */
 class TimesheetMirror
 {
@@ -76,12 +81,13 @@ class TimesheetMirror
     public function build(Collection $points, CarbonInterface $start, CarbonInterface $end): array
     {
         $pointsByDate = $points->groupBy(fn (Point $point) => Carbon::parse($point->date)->format('Y-m-d'));
+        $labels = AfdPointDecision::activeLabels($points->pluck('id')->filter()->map(fn ($id) => (int) $id)->values()->all());
 
         $days = [];
 
         if ($start->toDateString() <= $end->toDateString()) {
             foreach ($this->calendar->days($start, $end) as $date => $dayType) {
-                $days[] = $this->day(CarbonImmutable::parse($date), $dayType, $pointsByDate->get($date, collect()));
+                $days[] = $this->day(CarbonImmutable::parse($date), $dayType, $pointsByDate->get($date, collect()), $labels);
             }
         }
 
@@ -131,9 +137,10 @@ class TimesheetMirror
 
     /**
      * @param  Collection<int, Point>  $points
+     * @param  array<int, string>  $labels  Rótulo da anotação ativa do RH por id de ponto.
      * @return array<string, mixed>
      */
-    private function day(CarbonImmutable $date, CalendarDayType $dayType, Collection $points): array
+    private function day(CarbonImmutable $date, CalendarDayType $dayType, Collection $points, array $labels = []): array
     {
         $slots = $this->distribute($points);
         $punchCount = $points->count();
@@ -161,6 +168,10 @@ class TimesheetMirror
             'is_highlighted' => $dayType !== CalendarDayType::BusinessDay,
             'punch_count' => $punchCount,
             'has_manual_punch' => $points->contains(fn (Point $point) => $point->type === 'manual'),
+            'hr_annotations' => $points->filter(fn (Point $point) => isset($labels[$point->id]))
+                ->sortBy('time')
+                ->map(fn (Point $point) => Carbon::parse($point->time)->format('H:i').' '.$labels[$point->id])
+                ->values()->all(),
             ...$slots,
             'status' => $status,
             'status_label' => $status->label(),

@@ -10,9 +10,11 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 /**
  * Lote auditável da correção histórica do importador AFD (AfdHistoricalCorrection):
  * registro das pendências históricas, quarentena de pontos indevidos, recuperação
- * de marcações ausentes ou retenção de marcações novas por decisão do RH. Guarda o SHA-256 do manifesto e do AFD, a identidade do banco
- * em que foi aplicado e quem aplicou ou reverteu. Nunca é apagado: a reversão só muda
- * o estado para `reverted`.
+ * de marcações ausentes, retenção de marcações novas por decisão do RH ou decisões do RH
+ * sobre pendências históricas (`decision`, AfdHistoricalNsrDecision) ou anotações do RH
+ * sobre pontos importados (`point_annotation`, AfdPointDecision). Guarda o SHA-256
+ * do manifesto e do AFD, a identidade do banco em que foi aplicado e quem aplicou ou
+ * reverteu. Nunca é apagado: a reversão só muda o estado para `reverted`.
  */
 class AfdCorrectionBatch extends Model
 {
@@ -26,6 +28,10 @@ class AfdCorrectionBatch extends Model
     public const KIND_RECOVERY = 'recovery';
 
     public const KIND_WITHHOLDING = 'withholding';
+
+    public const KIND_DECISION = 'decision';
+
+    public const KIND_POINT_ANNOTATION = 'point_annotation';
 
     public const STATUS_APPLIED = 'applied';
 

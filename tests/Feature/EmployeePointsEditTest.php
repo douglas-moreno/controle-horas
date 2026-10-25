@@ -1,6 +1,7 @@
 <?php
 
 use App\Livewire\EmployeePointsEdit;
+use App\Models\AfdHistoricalNsr;
 use App\Models\Employee;
 use App\Models\Point;
 use App\Models\User;
@@ -76,4 +77,26 @@ test('a manual punch can still be added', function () {
         ->assertHasNoErrors();
 
     expect(Point::query()->where('pis', $this->employee->pis)->whereDate('date', '2026-09-15')->where('type', 'manual')->where('time', '17:30:00')->exists())->toBeTrue();
+});
+
+test('a manual punch kept by an HR decision cannot be removed and is marked on the screen', function () {
+    AfdHistoricalNsr::factory()->manualRetained($this->manualPoint->id)->create();
+
+    ($this->screen)()
+        ->assertDontSeeHtml('removePoint('.$this->manualPoint->id.')')
+        ->assertSee('Mantido pelo RH')
+        ->call('removePoint', $this->manualPoint->id);
+
+    $this->assertModelExists($this->manualPoint);
+});
+
+test('a manual punch can be removed again once the HR decision no longer keeps it', function () {
+    $entry = AfdHistoricalNsr::factory()->manualRetained($this->manualPoint->id)->create();
+    $entry->update(['status' => AfdHistoricalNsr::STATUS_PENDING]);
+
+    ($this->screen)()
+        ->assertSeeHtml('removePoint('.$this->manualPoint->id.')')
+        ->call('removePoint', $this->manualPoint->id);
+
+    $this->assertModelMissing($this->manualPoint);
 });

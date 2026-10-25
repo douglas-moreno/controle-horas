@@ -6,6 +6,8 @@ use Database\Factories\AfdHistoricalNsrFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
  * Marcação (tipo 3) anterior ao cursor que o importador legado não gravou: pendência
@@ -84,5 +86,23 @@ class AfdHistoricalNsr extends Model
     public function batch(): BelongsTo
     {
         return $this->belongsTo(AfdCorrectionBatch::class, 'afd_correction_batch_id');
+    }
+
+    /**
+     * Histórico de decisões do RH sobre esta pendência (append-only).
+     *
+     * @return HasMany<AfdHistoricalNsrDecision, $this>
+     */
+    public function decisions(): HasMany
+    {
+        return $this->hasMany(AfdHistoricalNsrDecision::class);
+    }
+
+    /**
+     * @return HasOne<AfdHistoricalNsrDecision, $this>
+     */
+    public function activeDecision(): HasOne
+    {
+        return $this->hasOne(AfdHistoricalNsrDecision::class)->where('status', AfdHistoricalNsrDecision::STATUS_ACTIVE);
     }
 }

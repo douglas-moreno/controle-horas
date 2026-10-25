@@ -123,7 +123,7 @@
                                 @if ($day['holiday'])
                                     Feriado: {{ $day['holiday'] }}@if ($day['status_label']) · @endif
                                 @endif
-                                {{ $day['status_label'] }}
+                                {{ collect([$day['status_label'], ...($day['hr_annotations'] ?? [])])->filter()->implode(' · ') }}
                             </td>
                             <td></td>
                             <td class="check"></td>

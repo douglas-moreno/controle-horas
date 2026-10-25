@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Enums\AfdRecordType;
+use App\Models\AfdPointDecision;
 use App\Models\AfdRep;
 use App\Models\Employee;
 use App\Models\ImportedLines;
@@ -390,6 +391,8 @@ class AfdPrecheck
             $employees['punches_after_recision'] > 0 ? $employees['punches_after_recision'].' PIS de funcionário rescindido com marcação nova posterior à rescisão.' : null,
             $records['new'] === 0 ? 'Nenhuma marcação nova: a importação não gravaria batidas.' : null,
             $report['coverage']['scope']['partial'] ? 'AFD parcial: a cobertura de NSR se limita aos registros presentes no arquivo (NSR '.$report['coverage']['scope']['first_nsr'].' a '.$report['coverage']['scope']['last_nsr'].'); os NSR '.collect($report['coverage']['scope']['unchecked'])->map(fn (array $range) => $range[0] === $range[1] ? (string) $range[0] : $range[0].' a '.$range[1])->implode(' e ').' até o cursor não foram conferidos, e a reconciliação histórica NÃO está completa.' : null,
+            ($annotations = AfdPointDecision::activeCounts()) !== [] ? array_sum($annotations).' ponto(s) importado(s) com anotação do RH ('.collect($annotations)->map(fn (int $count, string $decision) => AfdPointDecision::LABELS[$decision].': '.$count)->implode(', ').'): só registro; continuam contando no espelho e nos cálculos.' : null,
+            $report['coverage']['counts']['manual_retained'] > 0 ? $report['coverage']['counts']['manual_retained'].' ponto(s) manual(is) mantido(s) por decisão do RH no lugar da marcação do AFD: protegidos contra exclusão e alteração na aplicação; exclusão direta no banco torna a cobertura inconsistente e bloqueia a importação.' : null,
             $report['coverage']['counts']['withheld'] > 0 ? $report['coverage']['counts']['withheld'].' marcação(ões) retida(s) por decisão do RH até o cursor (NSR '.implode(', ', array_slice($report['coverage']['nsrs']['withheld'], 0, 10)).'), NÃO importada(s): aguardam decisão final do RH.' : null,
             $report['coverage']['counts']['pending'] > 0 ? $report['coverage']['counts']['pending'].' pendência(s) histórica(s) conhecida(s) até o cursor, NÃO resolvida(s) ('.collect($report['coverage']['pending_by_classification'])->map(fn ($count, $class) => $class.': '.$count)->implode(', ').'): dependem de recuperação ou de decisão do RH.' : null,
         ]);

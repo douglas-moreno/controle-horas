@@ -2,6 +2,8 @@
 
 namespace App\Livewire;
 
+use App\Models\AfdHistoricalNsr;
+use App\Models\AfdPointDecision;
 use App\Models\Employee;
 use App\Models\Point;
 use Livewire\Attributes\Locked;
@@ -54,8 +56,10 @@ class EmployeePointsEdit extends Component
 
     /**
      * Exclui uma batida manual do funcionário e da data da tela. A verificação é feita
-     * no servidor: batidas de outro funcionário ou data e batidas importadas do relógio
-     * são recusadas mesmo quando o método é chamado diretamente.
+     * no servidor: batidas de outro funcionário ou data, batidas importadas do relógio e
+     * batidas manuais mantidas por decisão do RH (pendência histórica do AFD) e batidas
+     * referenciadas por anotação do RH (original de uma duplicada) são recusadas mesmo quando
+     * o método é chamado diretamente.
      */
     public function removePoint($pointId)
     {
@@ -77,6 +81,24 @@ class EmployeePointsEdit extends Component
             $this->notification()->error(
                 $title = 'Exclusão Não Permitida',
                 $description = 'Batidas importadas do relógio não podem ser excluídas.'
+            );
+
+            return;
+        }
+
+        if ($point->isRetainedByHrDecision()) {
+            $this->notification()->error(
+                $title = 'Exclusão Não Permitida',
+                $description = Point::RETAINED_BY_HR_MESSAGE
+            );
+
+            return;
+        }
+
+        if ($point->isAnnotatedByHr()) {
+            $this->notification()->error(
+                $title = 'Exclusão Não Permitida',
+                $description = Point::ANNOTATED_BY_HR_MESSAGE
             );
 
             return;
@@ -110,6 +132,13 @@ class EmployeePointsEdit extends Component
             'employee' => $this->employee,
             'date' => $this->date,
             'points' => $this->points,
+            'annotationLabels' => AfdPointDecision::activeLabels(collect($this->points)->pluck('id')->map(fn ($id) => (int) $id)->all()),
+            'retainedPointIds' => AfdHistoricalNsr::query()
+                ->whereIn('related_manual_point_id', collect($this->points)->pluck('id'))
+                ->where('status', AfdHistoricalNsr::STATUS_MANUAL_RETAINED)
+                ->pluck('related_manual_point_id')
+                ->map(fn ($id) => (int) $id)
+                ->all(),
         ]);
     }
 }

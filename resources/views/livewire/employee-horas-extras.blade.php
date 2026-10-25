@@ -115,6 +115,9 @@
                                 @if ($day['status_label'])
                                     <x-ui-badge :label="$day['status_label']" :color="$day['needs_review'] ? 'amber' : 'gray'" />
                                 @endif
+                                @foreach ($day['hr_annotations'] ?? [] as $annotation)
+                                    <x-ui-badge :label="$annotation" color="gray" title="Anotação do RH: só registro, o ponto continua contando nos cálculos" />
+                                @endforeach
                             </td>
                         </tr>
                     @endforeach

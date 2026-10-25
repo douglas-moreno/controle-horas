@@ -765,7 +765,7 @@ class AfdHistoricalCorrection
      * @param  list<int>  $ids
      * @return Collection<int, object>
      */
-    private function canonicalPoints(array $ids, bool $lock): Collection
+    public function canonicalPoints(array $ids, bool $lock): Collection
     {
         $points = collect();
 
@@ -802,7 +802,7 @@ class AfdHistoricalCorrection
      * @param  list<int>  $ids
      * @return array{total: int, listed: int, others: string}
      */
-    private function pointsFingerprint(array $ids): array
+    public function pointsFingerprint(array $ids): array
     {
         $listed = array_flip($ids);
         $context = hash_init('sha256');
