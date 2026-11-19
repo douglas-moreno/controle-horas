@@ -510,7 +510,7 @@ class AfdDecisionMatrix
     }
 
     /**
-     * Data e hora da decisão: `dd/mm/aaaa [hh:mm[:ss]]`, `aaaa-mm-dd [hh:mm[:ss]]` no fuso
+     * Data e hora da decisão: `dd/mm/aaaa` ou `aaaa-mm-dd`, com hora opcional (`hh:mm` ou `hh:mm:ss`), no fuso
      * informado (só a data vale 00:00) ou ISO 8601 com fuso explícito.
      *
      * @return array{0: ?string, 1: ?string}
