@@ -7,6 +7,7 @@ use DomainException;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
  * Batida do funcionário (`importado` do relógio ou `manual`).
@@ -85,5 +86,15 @@ class Point extends Model
     public function employee(): BelongsTo
     {
         return $this->belongsTo(Employee::class, 'pis', 'pis');
+    }
+
+    /**
+     * Justificativa que criou esta batida manual (esquecimento de marcação), se houver.
+     *
+     * @return HasOne<PointJustification, $this>
+     */
+    public function justification(): HasOne
+    {
+        return $this->hasOne(PointJustification::class, 'manual_point_id');
     }
 }

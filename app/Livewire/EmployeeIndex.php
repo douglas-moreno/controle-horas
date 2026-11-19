@@ -50,6 +50,15 @@ class EmployeeIndex extends Component
             return;
         }
 
+        if ($employee->hasPointJustifications()) {
+            $this->notification()->error(
+                $title = 'Exclusão Não Permitida',
+                $description = 'O funcionário possui justificativas do controle de ponto. Informe a data de rescisão em vez de excluí-lo.'
+            );
+
+            return;
+        }
+
         $employee->delete();
 
         $this->notification()->success(

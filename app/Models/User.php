@@ -3,6 +3,8 @@
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
+use App\Enums\Permission;
+use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -11,7 +13,7 @@ use Laravel\Fortify\TwoFactorAuthenticatable;
 
 class User extends Authenticatable
 {
-    /** @use HasFactory<\Database\Factories\UserFactory> */
+    /** @use HasFactory<UserFactory> */
     use HasFactory, Notifiable, TwoFactorAuthenticatable;
 
     /**
@@ -47,7 +49,42 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'permissions' => 'array',
         ];
+    }
+
+    /**
+     * Permissão individual do usuário. Sem a coluna preenchida, nenhuma permissão.
+     */
+    public function hasPermission(Permission $permission): bool
+    {
+        return in_array($permission->value, $this->permissions ?? [], true);
+    }
+
+    /**
+     * Concede a permissão e grava. Sem efeito quando o usuário já a possui.
+     */
+    public function grantPermission(Permission $permission): void
+    {
+        if ($this->hasPermission($permission)) {
+            return;
+        }
+
+        $this->permissions = [...($this->permissions ?? []), $permission->value];
+        $this->save();
+    }
+
+    /**
+     * Retira a permissão e grava. Sem efeito quando o usuário não a possui.
+     */
+    public function revokePermission(Permission $permission): void
+    {
+        if (! $this->hasPermission($permission)) {
+            return;
+        }
+
+        $this->permissions = array_values(array_diff($this->permissions ?? [], [$permission->value]));
+        $this->save();
     }
 
     /**

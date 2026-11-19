@@ -57,6 +57,23 @@ class Employee extends Model
     }
 
     /**
+     * @return HasMany<PointJustification, $this>
+     */
+    public function pointJustifications(): HasMany
+    {
+        return $this->hasMany(PointJustification::class);
+    }
+
+    /**
+     * Indica se o funcionário possui justificativas do controle de ponto (ativas ou
+     * canceladas), que impedem a exclusão física.
+     */
+    public function hasPointJustifications(): bool
+    {
+        return $this->pointJustifications()->exists();
+    }
+
+    /**
      * Indica se o funcionário possui registros do módulo de benefícios, que impedem a
      * exclusão física. Batidas de ponto não contam como histórico de benefício.
      */
