@@ -23,4 +23,13 @@ enum PunchKind: string
             self::Exit => 'Saída',
         };
     }
+
+    /**
+     * Lado da marcação na sequência cronológica do dia: entrada (posição ímpar) para
+     * Entry e BreakEnd; saída (posição par) para BreakStart e Exit.
+     */
+    public function isEntrySide(): bool
+    {
+        return in_array($this, [self::Entry, self::BreakEnd], true);
+    }
 }

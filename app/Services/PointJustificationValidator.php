@@ -48,11 +48,12 @@ class PointJustificationValidator
 
     /**
      * @param  array<string, mixed>  $input  reason_id, treatment, full_day, start_time, end_time, ends_next_day, punch_kind, allowed_minutes, observation, request_uuid
+     * @param  bool  $checkRequestUuid  false somente para comparar um reenvio com a justificativa já gravada pelo mesmo identificador.
      * @return array{reason: PointJustificationReason, closed_period: ?BenefitPeriod, attributes: array<string, mixed>}
      *
      * @throws ValidationException
      */
-    public function validate(Employee $employee, string $date, array $input, User $user): array
+    public function validate(Employee $employee, string $date, array $input, User $user, bool $checkRequestUuid = true): array
     {
         $occurrenceDate = $this->parsedDate($date);
 
@@ -66,7 +67,7 @@ class PointJustificationValidator
             'reason_id' => ['required', 'integer'],
             'treatment' => ['required', Rule::enum(JustificationTreatment::class)],
             'observation' => ['nullable', 'string', 'max:'.self::MAX_OBSERVATION_LENGTH],
-            'request_uuid' => ['required', 'uuid', Rule::unique(PointJustification::class, 'request_uuid')],
+            'request_uuid' => ['required', 'uuid', ...($checkRequestUuid ? [Rule::unique(PointJustification::class, 'request_uuid')] : [])],
         ], [
             'reason_id.required' => 'Informe o motivo.',
             'reason_id.integer' => 'Motivo inválido.',

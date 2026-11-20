@@ -12,7 +12,10 @@ use Illuminate\Database\Seeder;
  * Catálogo inicial de motivos de justificativa (especificação v1.1, item 3.1).
  *
  * Idempotente e não destrutivo: motivos já existentes (mesmo `code`) são mantidos como
- * estão, preservando as alterações do RH. Nenhum motivo exige documento: a política
+ * estão, preservando as alterações do RH. Criam batida manual: esquecimento de marcação,
+ * falha no relógio e trabalho externo sem marcação (decisão da F3; em catálogos já
+ * semeados, a migration enable_manual_point_for_clock_failure_and_external_work_reasons
+ * liga a opção). Nenhum motivo exige documento: a política
  * será definida pelo RH. `allowed_treatments` nulo libera todos os tratamentos suportados
  * até o RH definir a matriz motivo × tratamento.
  */
@@ -44,8 +47,8 @@ class PointJustificationReasonSeeder extends Seeder
         'duplicate_punch' => ['Marcação duplicada', JustificationCategory::Punch, JustificationTimeMode::SinglePunch, JustificationTreatment::NoAllowance, false],
         'incorrect_punch' => ['Marcação incorreta', JustificationCategory::Punch, JustificationTimeMode::SinglePunch, JustificationTreatment::NoAllowance, false],
         'excess_punch' => ['Marcação excedente', JustificationCategory::Punch, JustificationTimeMode::SinglePunch, JustificationTreatment::NoAllowance, false],
-        'clock_failure' => ['Falha no relógio de ponto', JustificationCategory::Punch, JustificationTimeMode::SinglePunch, JustificationTreatment::NoAllowance, false],
-        'external_work_without_punch' => ['Trabalho externo sem marcação', JustificationCategory::Punch, JustificationTimeMode::SinglePunch, JustificationTreatment::NoAllowance, false],
+        'clock_failure' => ['Falha no relógio de ponto', JustificationCategory::Punch, JustificationTimeMode::SinglePunch, JustificationTreatment::NoAllowance, true],
+        'external_work_without_punch' => ['Trabalho externo sem marcação', JustificationCategory::Punch, JustificationTimeMode::SinglePunch, JustificationTreatment::NoAllowance, true],
 
         'authorized_overtime' => ['Hora extra autorizada', JustificationCategory::WorkdayAndOvertime, JustificationTimeMode::Interval, JustificationTreatment::NoAllowance, false],
         'hours_compensation' => ['Compensação de horas', JustificationCategory::WorkdayAndOvertime, JustificationTimeMode::FullDayOrInterval, JustificationTreatment::NoAllowance, false],

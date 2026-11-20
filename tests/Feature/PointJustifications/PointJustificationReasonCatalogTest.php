@@ -26,14 +26,15 @@ test('seeds the 25 reasons of the initial catalog grouped by category', function
         ->and($reasons->every(fn ($reason) => $reason->active && ! $reason->requires_document && $reason->allowed_treatments === null))->toBeTrue();
 });
 
-test('only the forgotten punch creates a manual punch', function () {
+test('the forgotten punch, the clock failure and the external work create a manual punch', function () {
     $this->seed(PointJustificationReasonSeeder::class);
 
     $forgotten = PointJustificationReason::query()->where('code', 'forgotten_punch')->sole();
 
     expect($forgotten->name)->toBe('Esquecimento de marcação')
         ->and($forgotten->time_mode)->toBe(JustificationTimeMode::SinglePunch)
-        ->and(PointJustificationReason::query()->where('creates_manual_point', true)->pluck('code')->all())->toBe(['forgotten_punch']);
+        ->and(PointJustificationReason::query()->where('creates_manual_point', true)->orderBy('sort_order')->pluck('code')->all())
+        ->toBe(['forgotten_punch', 'clock_failure', 'external_work_without_punch']);
 });
 
 test('the seeder is idempotent and keeps the changes made by HR', function () {

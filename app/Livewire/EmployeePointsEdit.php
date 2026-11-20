@@ -12,6 +12,7 @@ use App\Models\Point;
 use App\Models\PointJustification;
 use App\Models\PointJustificationReason;
 use App\Services\ManualPointRegistrar;
+use App\Services\PointJustificationService;
 use App\Services\PointJustificationValidator;
 use DomainException;
 use Illuminate\Support\Carbon;
@@ -182,16 +183,18 @@ class EmployeePointsEdit extends Component
     }
 
     /**
-     * Valida a justificativa no servidor. A gravação e seus efeitos ficam para a F3: com os
-     * dados válidos, nada é gravado e o identificador da operação é mantido.
+     * Registra a justificativa pelo PointJustificationService (validação, efeitos e
+     * histórico em uma transação). Só confirma depois da gravação; em seguida fecha o
+     * formulário e prepara um novo identificador para o próximo cadastro. O reenvio do
+     * mesmo identificador devolve o registro existente sem gravar de novo.
      */
-    public function submitJustification(PointJustificationValidator $validator): void
+    public function submitJustification(PointJustificationService $service): void
     {
         $this->authorize('manage-point-justifications');
         $this->resetValidation();
 
         try {
-            $validator->validate($this->employee, (string) $this->date, [
+            $result = $service->register($this->employee, (string) $this->date, [
                 ...$this->justification,
                 'request_uuid' => $this->justificationRequestUuid,
             ], auth()->user());
@@ -199,9 +202,25 @@ class EmployeePointsEdit extends Component
             throw ValidationException::withMessages(collect($exception->errors())
                 ->mapWithKeys(fn (array $messages, string $key) => ['justification.'.$key => $messages])
                 ->all());
+        } catch (DomainException $exception) {
+            $this->addError('justification.form', $exception->getMessage());
+
+            return;
         }
 
-        $this->addError('justification.form', 'Dados válidos, mas a gravação de justificativas ainda não está disponível. Nada foi registrado.');
+        $this->showJustificationModal = false;
+        $this->justification = self::emptyJustification();
+        $this->justificationRequestUuid = (string) Str::uuid();
+        $this->loadPoints();
+
+        $justification = $result['justification'];
+        $description = $justification->reason->name.($justification->manual_point_id !== null ? ' — marcação manual das '.substr((string) $justification->start_time, 0, 5).' criada.' : '.');
+
+        if ($result['created']) {
+            $this->notification()->success($title = 'Justificativa Registrada', $description);
+        } else {
+            $this->notification()->info($title = 'Justificativa Já Registrada', 'Este envio já havia sido gravado; nada foi duplicado.');
+        }
     }
 
     /**
@@ -280,8 +299,13 @@ class EmployeePointsEdit extends Component
         $this->employee = Employee::find($employee);
         $this->date = $date;
 
+        $this->loadPoints();
+    }
+
+    private function loadPoints(): void
+    {
         $this->points = Point::where('pis', $this->employee->pis)
-            ->whereDate('date', $date)
+            ->whereDate('date', $this->date)
             ->orderBy('time', 'asc')
             ->get();
     }

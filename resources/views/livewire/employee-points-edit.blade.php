@@ -149,12 +149,15 @@
         <x-ui-modal-card wire:model="showJustificationModal" title="Nova Justificativa">
             <div class="space-y-4">
                 @error('justification.form')
-                    <div class="rounded border border-amber-300 bg-amber-50 p-3 text-amber-800">{{ $message }}</div>
+                    <div class="rounded border border-red-300 bg-red-50 p-3 text-red-700">{{ $message }}</div>
                 @enderror
                 @error('justification.request_uuid')
                     <div class="rounded border border-red-300 bg-red-50 p-3 text-red-700">{{ $message }}</div>
                 @enderror
                 @error('justification.occurrence_date')
+                    <div class="rounded border border-red-300 bg-red-50 p-3 text-red-700">{{ $message }}</div>
+                @enderror
+                @error('justification.period')
                     <div class="rounded border border-red-300 bg-red-50 p-3 text-red-700">{{ $message }}</div>
                 @enderror
 
@@ -189,6 +192,9 @@
                     @endif
 
                     @if ($showsSinglePunch)
+                        @if ($selectedReason->creates_manual_point)
+                            <p class="text-sm text-gray-500">Este motivo cria a marcação manual no horário informado. O tipo deve corresponder à posição da marcação na sequência do dia (ímpar: entrada; par: saída).</p>
+                        @endif
                         <div class="grid gap-4 md:grid-cols-2">
                             <x-ui-select
                                 wire:model="justification.punch_kind" :options="$punchKindOptions" option-label="name" option-value="id"
@@ -208,7 +214,10 @@
             <x-slot name="footer">
                 <div class="flex justify-end space-x-2">
                     <x-ui-button secondary wire:click="$set('showJustificationModal', false)" label="Fechar" />
-                    <x-ui-button primary wire:click="submitJustification" label="Validar" :disabled="$selectedReason === null" />
+                    <x-ui-button
+                        primary wire:click="submitJustification" label="Registrar" spinner="submitJustification"
+                        wire:loading.attr="disabled" wire:target="submitJustification" :disabled="$selectedReason === null"
+                    />
                 </div>
             </x-slot>
         </x-ui-modal-card>

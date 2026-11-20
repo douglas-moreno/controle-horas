@@ -10,8 +10,8 @@ use App\Models\Point;
 use App\Models\PointJustification;
 use App\Models\PointJustificationReason;
 use App\Models\User;
+use App\Services\PointJustificationService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Livewire\Features\SupportLockedProperties\CannotUpdateLockedPropertyException;
 use Livewire\Livewire;
@@ -196,31 +196,15 @@ test('an inactive reason cannot be submitted even when set by the client', funct
         ->assertHasErrors(['justification.reason_id']);
 });
 
-test('valid data is not recorded and no success is reported', function () {
-    $before = DB::table('points')->orderBy('id')->get();
-
-    ($this->screen)($this->hr)
-        ->call('openJustificationForm')
-        ->set('justification.reason_id', $this->punchReason->id)
-        ->set('justification.punch_kind', 'exit')
-        ->set('justification.start_time', '17:30')
-        ->call('submitJustification')
-        ->assertHasErrors(['justification.form'])
-        ->assertSee('Nada foi registrado.')
-        ->assertNotDispatched('wireui:notification');
-
-    expect(PointJustification::query()->count())->toBe(0)
-        ->and(DB::table('points')->orderBy('id')->get())->toEqual($before);
-});
-
-test('each new form gets a new request identifier, kept across submissions', function () {
+test('each new form gets a new request identifier, kept across failed submissions', function () {
     $component = ($this->screen)($this->hr)->assertSet('justificationRequestUuid', null);
 
     $component->call('openJustificationForm');
     $first = $component->get('justificationRequestUuid');
 
-    $component->set('justification.reason_id', $this->fullDayReason->id)
+    $component->set('justification.reason_id', $this->intervalReason->id)
         ->call('submitJustification')
+        ->assertHasErrors()
         ->call('submitJustification')
         ->assertSet('justificationRequestUuid', $first);
 
@@ -247,4 +231,90 @@ test('opening a new form resets the previous fields and errors', function () {
         ->assertHasNoErrors()
         ->assertSet('justification.reason_id', null)
         ->assertSet('justification.treatment', null);
+});
+
+test('a valid justification is recorded, listed and the form is closed with a new identifier', function () {
+    $component = ($this->screen)($this->hr)->call('openJustificationForm');
+    $uuid = $component->get('justificationRequestUuid');
+
+    $component->set('justification.reason_id', $this->intervalReason->id)
+        ->set('justification.start_time', '07:30')
+        ->set('justification.end_time', '08:15')
+        ->set('justification.observation', 'Ônibus quebrou')
+        ->call('submitJustification')
+        ->assertHasNoErrors()
+        ->assertSet('showJustificationModal', false)
+        ->assertSet('justification.reason_id', null)
+        ->assertNotSet('justificationRequestUuid', $uuid)
+        ->assertDispatched('wireui:notification')
+        ->assertSee('Ônibus quebrou')
+        ->assertViewHas('justifications', fn ($justifications) => $justifications->count() === 1);
+
+    $justification = PointJustification::query()->sole();
+
+    expect($justification->request_uuid)->toBe($uuid)
+        ->and($justification->created_by)->toBe($this->hr->id)
+        ->and($justification->duration_minutes)->toBe(45);
+});
+
+test('a forgotten punch creates the manual punch and refreshes the punches of the screen', function () {
+    ($this->screen)($this->hr)
+        ->call('openJustificationForm')
+        ->set('justification.reason_id', $this->punchReason->id)
+        ->set('justification.punch_kind', 'break_start')
+        ->set('justification.start_time', '12:00')
+        ->call('submitJustification')
+        ->assertHasNoErrors()
+        ->assertViewHas('points', fn ($points) => $points->pluck('type')->sort()->values()->all() === ['importado', 'manual'])
+        ->assertSee('Marcação manual');
+
+    expect(PointJustification::query()->sole()->manualPoint->type)->toBe('manual');
+});
+
+test('a resubmission of the same operation does not duplicate anything', function () {
+    $component = ($this->screen)($this->hr)
+        ->call('openJustificationForm')
+        ->set('justification.reason_id', $this->punchReason->id)
+        ->set('justification.punch_kind', 'exit')
+        ->set('justification.start_time', '17:30');
+    $uuid = $component->get('justificationRequestUuid');
+    $snapshot = $component->get('justification');
+
+    $component->call('submitJustification')->assertHasNoErrors();
+
+    app(PointJustificationService::class)->register($this->employee, '2026-09-15', [...$snapshot, 'request_uuid' => $uuid], $this->hr->fresh());
+
+    expect(PointJustification::query()->count())->toBe(1)
+        ->and(Point::query()->where('type', 'manual')->count())->toBe(1);
+});
+
+test('duplicate and overlap errors are shown on the form without recording', function () {
+    PointJustification::factory()->for($this->employee)->between('2026-09-15', '08:00', '10:00')->create(['reason_id' => $this->intervalReason->id]);
+
+    ($this->screen)($this->hr)
+        ->call('openJustificationForm')
+        ->set('justification.reason_id', $this->intervalReason->id)
+        ->set('justification.start_time', '09:00')
+        ->set('justification.end_time', '11:00')
+        ->call('submitJustification')
+        ->assertHasErrors(['justification.period'])
+        ->assertSee('Já existe uma justificativa ativa incompatível para o período')
+        ->assertSet('showJustificationModal', true)
+        ->set('justification.reason_id', $this->punchReason->id)
+        ->set('justification.punch_kind', 'entry')
+        ->set('justification.start_time', '07:30')
+        ->call('submitJustification')
+        ->assertHasErrors(['justification.start_time'])
+        ->assertNotDispatched('wireui:notification');
+
+    expect(PointJustification::query()->count())->toBe(1)
+        ->and(Point::query()->count())->toBe(1);
+});
+
+test('the confirm button is disabled while the operation is running', function () {
+    ($this->screen)($this->hr)
+        ->call('openJustificationForm')
+        ->set('justification.reason_id', $this->intervalReason->id)
+        ->assertSeeHtml('wire:loading.attr="disabled"')
+        ->assertSeeHtml('wire:target="submitJustification"');
 });
