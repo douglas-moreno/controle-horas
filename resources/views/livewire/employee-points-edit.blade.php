@@ -22,6 +22,8 @@
                             <span class="text-xs text-gray-500" title="{{ \App\Models\Point::ANNOTATED_BY_HR_MESSAGE }}">{{ $annotationLabels[$point->id] }}</span>
                         @elseif (in_array($point->id, $retainedPointIds, true))
                             <span class="text-xs text-gray-500" title="{{ \App\Models\Point::RETAINED_BY_HR_MESSAGE }}">Mantido pelo RH</span>
+                        @elseif (in_array($point->id, $justifiedPointIds, true))
+                            <span class="text-xs text-gray-500" title="{{ \App\Models\Point::LINKED_TO_JUSTIFICATION_MESSAGE }}">Justificativa</span>
                         @elseif ($point->type!=='importado')
                             <x-ui-button red sm wire:click="removePoint({{ $point->id }})" icon="trash" 
                                 class="hover:transition-all hover:duration-300 hover:scale-110"
@@ -99,6 +101,7 @@
                             <th class="p-2">Observação</th>
                             <th class="p-2">Registro</th>
                             <th class="p-2">Situação</th>
+                            <th class="p-2">Ações</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -128,16 +131,28 @@
                                 <td class="p-2 text-sm">
                                     {{ $item->creator?->name ?? '—' }}
                                     <div class="text-xs text-gray-500">{{ $item->created_at->format('d/m/Y H:i') }}</div>
+                                    @if ($item->updated_by !== null)
+                                        <div class="text-xs text-gray-500">Alterada por {{ $item->updater?->name ?? '—' }} em {{ $item->updated_at->format('d/m/Y H:i') }}</div>
+                                    @endif
                                 </td>
                                 <td class="p-2">
                                     @if ($item->isCanceled())
                                         <x-ui-badge label="Cancelada" color="gray" />
+                                        <div class="mt-1 text-xs text-gray-500">{{ $item->canceler?->name ?? '—' }} em {{ $item->canceled_at->format('d/m/Y H:i') }}: {{ $item->cancellation_reason }}</div>
                                     @else
                                         <x-ui-badge label="Ativa" color="green" />
                                     @endif
                                     @if ($item->manual_point_id !== null)
                                         <div class="mt-1"><x-ui-badge label="Marcação manual" color="orange" /></div>
                                     @endif
+                                </td>
+                                <td class="p-2">
+                                    @unless ($item->isCanceled())
+                                        <div class="flex space-x-1">
+                                            <x-ui-button sm secondary icon="pencil" wire:click="editJustification({{ $item->id }})" title="Editar" />
+                                            <x-ui-button sm red icon="x-mark" wire:click="confirmCancelJustification({{ $item->id }})" title="Cancelar" />
+                                        </div>
+                                    @endunless
                                 </td>
                             </tr>
                         @endforeach
@@ -146,7 +161,7 @@
             @endif
         </div>
 
-        <x-ui-modal-card wire:model="showJustificationModal" title="Nova Justificativa">
+        <x-ui-modal-card wire:model="showJustificationModal" :title="$isEditingJustification ? 'Editar Justificativa' : 'Nova Justificativa'">
             <div class="space-y-4">
                 @error('justification.form')
                     <div class="rounded border border-red-300 bg-red-50 p-3 text-red-700">{{ $message }}</div>
@@ -160,6 +175,9 @@
                 @error('justification.period')
                     <div class="rounded border border-red-300 bg-red-50 p-3 text-red-700">{{ $message }}</div>
                 @enderror
+                @error('justification.version')
+                    <div class="rounded border border-amber-300 bg-amber-50 p-3 text-amber-800">{{ $message }}</div>
+                @enderror
 
                 <div class="text-sm text-gray-600">
                     {{ $employee->name }} — {{ \Illuminate\Support\Carbon::parse($date)->format('d/m/Y') }}
@@ -167,6 +185,10 @@
                         <div class="mt-1"><x-ui-badge :label="'Competência fechada '.$closedPeriod->competence->format('m/Y')" color="amber" /></div>
                     @endif
                 </div>
+
+                @if ($isEditingJustification)
+                    <x-ui-input type="date" wire:model="justification.occurrence_date" label="Data da ocorrência" />
+                @endif
 
                 <x-ui-select
                     wire:model.live="justification.reason_id" :options="$reasonOptions" option-label="name" option-value="id"
@@ -215,8 +237,41 @@
                 <div class="flex justify-end space-x-2">
                     <x-ui-button secondary wire:click="$set('showJustificationModal', false)" label="Fechar" />
                     <x-ui-button
-                        primary wire:click="submitJustification" label="Registrar" spinner="submitJustification"
+                        primary wire:click="submitJustification" :label="$isEditingJustification ? 'Salvar Alterações' : 'Registrar'" spinner="submitJustification"
                         wire:loading.attr="disabled" wire:target="submitJustification" :disabled="$selectedReason === null"
+                    />
+                </div>
+            </x-slot>
+        </x-ui-modal-card>
+
+        <x-ui-modal-card wire:model="showCancelJustificationModal" title="Cancelar Justificativa">
+            <div class="space-y-4">
+                @foreach (['cancellation.form', 'cancellation.version', 'cancellation.occurrence_date'] as $errorKey)
+                    @error($errorKey)
+                        <div class="rounded border border-red-300 bg-red-50 p-3 text-red-700">{{ $message }}</div>
+                    @enderror
+                @endforeach
+
+                @if ($cancelingJustification !== null)
+                    <p>
+                        Confirma o cancelamento da justificativa <strong>{{ $cancelingJustification->reason->name }}</strong>
+                        de {{ $cancelingJustification->occurrence_date->format('d/m/Y') }}? A justificativa continua no histórico como cancelada.
+                    </p>
+                    @if ($cancelingJustification->manualPoint !== null)
+                        <div class="rounded border border-amber-300 bg-amber-50 p-3 text-amber-800">
+                            A marcação manual das {{ \Illuminate\Support\Carbon::parse($cancelingJustification->manualPoint->time)->format('H:i') }} criada por esta justificativa será removida.
+                        </div>
+                    @endif
+                @endif
+
+                <x-ui-textarea wire:model="cancellationReason" label="Motivo do cancelamento" />
+            </div>
+            <x-slot name="footer">
+                <div class="flex justify-end space-x-2">
+                    <x-ui-button secondary wire:click="$set('showCancelJustificationModal', false)" label="Voltar" />
+                    <x-ui-button
+                        red wire:click="cancelJustification" label="Confirmar Cancelamento" spinner="cancelJustification"
+                        wire:loading.attr="disabled" wire:target="cancelJustification"
                     />
                 </div>
             </x-slot>

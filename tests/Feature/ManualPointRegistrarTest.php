@@ -1,5 +1,7 @@
 <?php
 
+use App\Models\AfdHistoricalNsr;
+use App\Models\AfdPointDecision;
 use App\Models\Employee;
 use App\Models\Point;
 use App\Services\ManualPointRegistrar;
@@ -102,4 +104,53 @@ test('existing imported punches are never changed', function () {
     expect(fn () => $this->registrar->register($this->employee, '2026-09-15', '07:30'))->toThrow(DomainException::class);
 
     expect(DB::table('points')->where('id', $imported->id)->first())->toEqual($before);
+});
+
+test('moves a manual punch to another date and minute', function () {
+    $point = $this->registrar->register($this->employee, '2026-09-15', '07:30');
+
+    $moved = $this->registrar->move($this->employee, $point, '2026-09-16', '07:45:30');
+
+    expect($moved->id)->toBe($point->id)
+        ->and(DB::table('points')->where('id', $point->id)->value('date'))->toBe('2026-09-16')
+        ->and(DB::table('points')->where('id', $point->id)->value('time'))->toBe('07:45:00')
+        ->and(Point::query()->count())->toBe(1);
+});
+
+test('moving refuses another punch at the same minute but not the punch itself', function () {
+    $point = $this->registrar->register($this->employee, '2026-09-15', '07:30');
+    Point::factory()->forEmployee($this->employee)->on('2026-09-15')->create(['time' => '08:00:10']);
+
+    expect(fn () => $this->registrar->move($this->employee, $point, '2026-09-15', '08:00'))
+        ->toThrow(DomainException::class, 'Já existe uma batida deste funcionário nesta data às 08:00.');
+
+    expect($this->registrar->move($this->employee, $point, '2026-09-15', '07:30')->id)->toBe($point->id);
+});
+
+test('moving and removing refuse imported, foreign and protected punches', function (string $case, string $message) {
+    $point = match ($case) {
+        'imported' => Point::factory()->forEmployee($this->employee)->on('2026-09-15')->create(['time' => '07:30:00', 'nsr' => 10]),
+        'foreign' => Point::factory()->forEmployee(Employee::factory()->create())->on('2026-09-15')->manual()->create(['time' => '07:30:00']),
+        'retained' => tap($this->registrar->register($this->employee, '2026-09-15', '07:30'), fn (Point $point) => AfdHistoricalNsr::factory()->manualRetained($point->id)->create()),
+        'annotated' => tap($this->registrar->register($this->employee, '2026-09-15', '07:30'), fn (Point $point) => AfdPointDecision::factory()->create(['point_id' => $point->id])),
+    };
+    $before = DB::table('points')->orderBy('id')->get();
+
+    expect(fn () => $this->registrar->move($this->employee, $point, '2026-09-15', '07:45'))->toThrow(DomainException::class, $message)
+        ->and(fn () => $this->registrar->remove($this->employee, $point))->toThrow(DomainException::class, $message);
+
+    expect(DB::table('points')->orderBy('id')->get())->toEqual($before);
+})->with([
+    'imported' => ['imported', 'batidas importadas do relógio não podem ser alteradas nem excluídas'],
+    'other employee' => ['foreign', 'A marcação vinculada não pertence a este funcionário.'],
+    'retained by HR' => ['retained', Point::RETAINED_BY_HR_MESSAGE],
+    'annotated by HR' => ['annotated', Point::ANNOTATED_BY_HR_MESSAGE],
+]);
+
+test('removes an unprotected manual punch of the employee', function () {
+    $point = $this->registrar->register($this->employee, '2026-09-15', '07:30');
+
+    $this->registrar->remove($this->employee, $point);
+
+    expect(Point::query()->count())->toBe(0);
 });

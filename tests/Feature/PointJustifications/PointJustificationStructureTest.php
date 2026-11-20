@@ -76,13 +76,31 @@ test('a manual punch belongs to at most one justification', function () {
         ->toThrow(QueryException::class);
 });
 
-test('removing the linked punch keeps the justification and clears the link', function () {
+test('removing the linked punch at database level keeps the justification and clears the link', function () {
     $point = Point::factory()->manual()->create();
     $justification = PointJustification::factory()->create(['manual_point_id' => $point->id]);
 
-    $point->delete();
+    DB::table('points')->where('id', $point->id)->delete();
 
     expect($justification->fresh()->manual_point_id)->toBeNull();
+});
+
+test('the Eloquent model refuses to delete a punch linked to an active justification', function () {
+    $point = Point::factory()->manual()->create();
+    $justification = PointJustification::factory()->create(['manual_point_id' => $point->id]);
+
+    expect(fn () => $point->delete())->toThrow(DomainException::class, Point::LINKED_TO_JUSTIFICATION_MESSAGE)
+        ->and(Point::query()->whereKey($point->id)->exists())->toBeTrue()
+        ->and($justification->fresh()->manual_point_id)->toBe($point->id);
+});
+
+test('a punch linked only to a canceled justification can be deleted', function () {
+    $point = Point::factory()->manual()->create();
+    PointJustification::factory()->canceled()->create(['manual_point_id' => $point->id]);
+
+    $point->delete();
+
+    expect(Point::query()->whereKey($point->id)->exists())->toBeFalse();
 });
 
 test('a justification cannot be deleted', function () {

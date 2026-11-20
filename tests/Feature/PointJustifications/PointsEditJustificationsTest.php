@@ -5,6 +5,8 @@ use App\Enums\JustificationTimeMode;
 use App\Enums\JustificationTreatment;
 use App\Enums\Permission;
 use App\Livewire\EmployeePointsEdit;
+use App\Models\AfdHistoricalNsr;
+use App\Models\AfdPointDecision;
 use App\Models\Employee;
 use App\Models\Point;
 use App\Models\PointJustification;
@@ -12,7 +14,9 @@ use App\Models\PointJustificationReason;
 use App\Models\User;
 use App\Services\PointJustificationService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Livewire\Features\SupportLockedProperties\CannotUpdateLockedPropertyException;
 use Livewire\Livewire;
 
@@ -53,6 +57,9 @@ test('a user without hr cannot call the protected methods directly', function (s
 })->with([
     'open form' => ['openJustificationForm', []],
     'submit' => ['submitJustification', []],
+    'edit' => ['editJustification', [1]],
+    'confirm cancel' => ['confirmCancelJustification', [1]],
+    'cancel' => ['cancelJustification', []],
 ]);
 
 test('a user without hr cannot drive the form by setting its fields', function () {
@@ -317,4 +324,299 @@ test('the confirm button is disabled while the operation is running', function (
         ->set('justification.reason_id', $this->intervalReason->id)
         ->assertSeeHtml('wire:loading.attr="disabled"')
         ->assertSeeHtml('wire:target="submitJustification"');
+});
+
+describe('edition and cancellation on the screen', function () {
+    beforeEach(function () {
+        $this->registerOnScreen = fn (array $input) => app(PointJustificationService::class)
+            ->register($this->employee, '2026-09-15', ['request_uuid' => (string) Str::uuid(), 'treatment' => 'no_allowance', ...$input], $this->hr)['justification'];
+    });
+
+    test('active justifications show the edit and cancel actions, canceled ones do not', function () {
+        $active = ($this->registerOnScreen)(['reason_id' => $this->intervalReason->id, 'start_time' => '07:30', 'end_time' => '08:00']);
+        $canceled = ($this->registerOnScreen)(['reason_id' => $this->intervalReason->id, 'start_time' => '09:00', 'end_time' => '10:00']);
+        app(PointJustificationService::class)->cancel($canceled, 'Lançado em dobro', 1, $this->hr);
+
+        ($this->screen)($this->hr)
+            ->assertSeeHtml('editJustification('.$active->id.')')
+            ->assertSeeHtml('confirmCancelJustification('.$active->id.')')
+            ->assertDontSeeHtml('editJustification('.$canceled->id.')')
+            ->assertDontSeeHtml('confirmCancelJustification('.$canceled->id.')')
+            ->assertSee('Lançado em dobro');
+    });
+
+    test('the edit form loads the current values and version and saves the changes', function () {
+        $justification = ($this->registerOnScreen)(['reason_id' => $this->intervalReason->id, 'start_time' => '07:30', 'end_time' => '08:00', 'observation' => 'Trânsito']);
+
+        ($this->screen)($this->hr)
+            ->call('editJustification', $justification->id)
+            ->assertSet('showJustificationModal', true)
+            ->assertSet('editingJustificationId', $justification->id)
+            ->assertSet('editingVersion', 1)
+            ->assertSet('justification.start_time', '07:30')
+            ->assertSet('justification.end_time', '08:00')
+            ->assertSet('justification.observation', 'Trânsito')
+            ->assertSee('Editar Justificativa')
+            ->assertSee('Salvar Alterações')
+            ->set('justification.end_time', '08:30')
+            ->call('submitJustification')
+            ->assertHasNoErrors()
+            ->assertSet('showJustificationModal', false)
+            ->assertSet('editingJustificationId', null)
+            ->assertDispatched('wireui:notification');
+
+        expect($justification->fresh()->end_time)->toBe('08:30:00')
+            ->and($justification->fresh()->version)->toBe(2)
+            ->and(PointJustification::query()->count())->toBe(1);
+    });
+
+    test('a concurrent change shows the version conflict and keeps the form open', function () {
+        $justification = ($this->registerOnScreen)(['reason_id' => $this->intervalReason->id, 'start_time' => '07:30', 'end_time' => '08:00']);
+
+        $component = ($this->screen)($this->hr)->call('editJustification', $justification->id);
+
+        app(PointJustificationService::class)->update($justification, ['reason_id' => $this->intervalReason->id, 'treatment' => 'no_allowance', 'start_time' => '07:30', 'end_time' => '09:00'], 1, $this->hr);
+
+        $component->set('justification.end_time', '08:15')
+            ->call('submitJustification')
+            ->assertHasErrors(['justification.version'])
+            ->assertSee('alterada por outro usuário')
+            ->assertSet('showJustificationModal', true);
+
+        expect($justification->fresh()->end_time)->toBe('09:00:00');
+    });
+
+    test('the version and the edited record cannot be tampered with', function (string $property) {
+        $justification = ($this->registerOnScreen)(['reason_id' => $this->intervalReason->id, 'start_time' => '07:30', 'end_time' => '08:00']);
+
+        ($this->screen)($this->hr)
+            ->call('editJustification', $justification->id)
+            ->set($property, 99);
+    })->with(['editingVersion', 'editingJustificationId', 'cancelingVersion', 'cancelingJustificationId'])
+        ->throws(CannotUpdateLockedPropertyException::class);
+
+    test('justifications of another employee or date cannot be opened', function () {
+        $other = PointJustification::factory()->create(['occurrence_date' => '2026-09-15']);
+        $otherDate = PointJustification::factory()->for($this->employee)->create(['occurrence_date' => '2026-09-16']);
+
+        ($this->screen)($this->hr)
+            ->call('editJustification', $other->id)
+            ->assertSet('editingJustificationId', null)
+            ->call('confirmCancelJustification', $otherDate->id)
+            ->assertSet('cancelingJustificationId', null)
+            ->assertSet('showCancelJustificationModal', false);
+    });
+
+    test('cancellation asks for confirmation and a reason, then removes the linked punch', function () {
+        $justification = ($this->registerOnScreen)(['reason_id' => $this->punchReason->id, 'start_time' => '12:00', 'punch_kind' => 'break_start']);
+
+        $component = ($this->screen)($this->hr)
+            ->call('confirmCancelJustification', $justification->id)
+            ->assertSet('showCancelJustificationModal', true)
+            ->assertSee('Confirma o cancelamento')
+            ->assertSee('A marcação manual das 12:00 criada por esta justificativa será removida.')
+            ->call('cancelJustification')
+            ->assertHasErrors(['cancellationReason'])
+            ->assertSet('showCancelJustificationModal', true);
+
+        expect($justification->fresh()->isCanceled())->toBeFalse();
+
+        $component->set('cancellationReason', 'Batida localizada no relógio')
+            ->call('cancelJustification')
+            ->assertHasNoErrors()
+            ->assertSet('showCancelJustificationModal', false)
+            ->assertDispatched('wireui:notification')
+            ->assertViewHas('points', fn ($points) => $points->pluck('type')->all() === ['importado']);
+
+        expect($justification->fresh()->isCanceled())->toBeTrue()
+            ->and(Point::query()->where('type', 'manual')->count())->toBe(0);
+    });
+
+    test('a protected punch shows why the cancellation is blocked', function () {
+        $justification = ($this->registerOnScreen)(['reason_id' => $this->punchReason->id, 'start_time' => '12:00', 'punch_kind' => 'break_start']);
+        AfdHistoricalNsr::factory()->manualRetained($justification->manual_point_id)->create();
+
+        ($this->screen)($this->hr)
+            ->call('confirmCancelJustification', $justification->id)
+            ->set('cancellationReason', 'Engano')
+            ->call('cancelJustification')
+            ->assertHasErrors(['cancellation.form'])
+            ->assertSee('Cancelamento bloqueado')
+            ->assertSet('showCancelJustificationModal', true);
+
+        expect($justification->fresh()->isCanceled())->toBeFalse()
+            ->and(Point::query()->whereKey($justification->manual_point_id)->exists())->toBeTrue();
+    });
+
+    test('the cancel button is disabled while the operation is running', function () {
+        $justification = ($this->registerOnScreen)(['reason_id' => $this->intervalReason->id, 'start_time' => '07:30', 'end_time' => '08:00']);
+
+        ($this->screen)($this->hr)
+            ->call('confirmCancelJustification', $justification->id)
+            ->assertSeeHtml('wire:target="cancelJustification"');
+    });
+});
+
+describe('manual deletion of punches linked to a justification', function () {
+    beforeEach(function () {
+        $this->linked = app(PointJustificationService::class)->register($this->employee, '2026-09-15', [
+            'request_uuid' => (string) Str::uuid(),
+            'reason_id' => $this->punchReason->id,
+            'treatment' => 'no_allowance',
+            'start_time' => '12:00',
+            'punch_kind' => 'break_start',
+        ], $this->hr)['justification'];
+        $this->table = fn (string $table) => DB::table($table)->orderBy('id')->get()->map(fn ($row) => (array) $row)->all();
+    });
+
+    test('deleting the linked punch is blocked for any user, even calling the method directly', function (string $who) {
+        $points = ($this->table)('points');
+        $justifications = ($this->table)('point_justifications');
+        $histories = ($this->table)('point_justification_histories');
+
+        ($this->screen)($who === 'hr' ? $this->hr : $this->common)
+            ->call('removePoint', $this->linked->manual_point_id)
+            ->assertDispatched('wireui:notification', fn (string $event, array $params) => str_contains(json_encode($params, JSON_UNESCAPED_UNICODE), 'criada por uma justificativa ativa'));
+
+        expect(($this->table)('points'))->toBe($points)
+            ->and(($this->table)('point_justifications'))->toBe($justifications)
+            ->and(($this->table)('point_justification_histories'))->toBe($histories)
+            ->and($this->linked->fresh()->isCanceled())->toBeFalse()
+            ->and($this->linked->fresh()->manual_point_id)->not->toBeNull();
+    })->with(['hr', 'common user']);
+
+    test('the linked punch shows a label instead of the delete button', function () {
+        ($this->screen)($this->hr)
+            ->assertDontSeeHtml('removePoint('.$this->linked->manual_point_id.')')
+            ->assertSeeHtml(e(Point::LINKED_TO_JUSTIFICATION_MESSAGE));
+    });
+
+    test('a manual punch without a link can still be deleted', function () {
+        $free = Point::factory()->forEmployee($this->employee)->on('2026-09-15')->manual()->create(['time' => '17:30:00']);
+
+        ($this->screen)($this->common)
+            ->assertSeeHtml('removePoint('.$free->id.')')
+            ->call('removePoint', $free->id);
+
+        expect(Point::query()->whereKey($free->id)->exists())->toBeFalse()
+            ->and(Point::query()->whereKey($this->linked->manual_point_id)->exists())->toBeTrue();
+    });
+
+    test('protected and imported punches stay protected', function () {
+        $retained = Point::factory()->forEmployee($this->employee)->on('2026-09-15')->manual()->create(['time' => '17:30:00']);
+        AfdHistoricalNsr::factory()->manualRetained($retained->id)->create();
+        $annotated = Point::factory()->forEmployee($this->employee)->on('2026-09-15')->manual()->create(['time' => '18:00:00']);
+        AfdPointDecision::factory()->create(['point_id' => $annotated->id]);
+        $points = ($this->table)('points');
+
+        ($this->screen)($this->hr)
+            ->call('removePoint', $retained->id)
+            ->call('removePoint', $annotated->id)
+            ->call('removePoint', $this->importedPoint->id);
+
+        expect(($this->table)('points'))->toBe($points);
+    });
+
+    test('after the cancellation the punch is removed by the justification flow', function () {
+        $pointId = $this->linked->manual_point_id;
+
+        app(PointJustificationService::class)->cancel($this->linked, 'Engano', 1, $this->hr);
+
+        expect(Point::query()->whereKey($pointId)->exists())->toBeFalse()
+            ->and(Point::query()->whereKey($this->importedPoint->id)->exists())->toBeTrue();
+    });
+});
+
+describe('deactivated reasons in existing justifications', function () {
+    beforeEach(function () {
+        $this->justification = app(PointJustificationService::class)->register($this->employee, '2026-09-15', [
+            'request_uuid' => (string) Str::uuid(),
+            'reason_id' => $this->intervalReason->id,
+            'treatment' => 'full_allowance',
+            'start_time' => '07:30',
+            'end_time' => '08:00',
+        ], $this->hr)['justification'];
+        $this->intervalReason->update(['active' => false]);
+        $this->catalog = fn () => DB::table('point_justification_reasons')->orderBy('id')->get()->map(fn ($row) => (array) $row)->all();
+        $this->catalogBefore = ($this->catalog)();
+    });
+
+    test('the edit form shows the current reason even when deactivated', function () {
+        ($this->screen)($this->hr)
+            ->call('editJustification', $this->justification->id)
+            ->assertSet('justification.reason_id', $this->intervalReason->id)
+            ->assertViewHas('selectedReason', fn ($reason) => $reason?->is($this->intervalReason))
+            ->assertViewHas('reasonOptions', fn (array $options) => collect($options)->contains(fn (array $option) => $option['id'] === $this->intervalReason->id && str_ends_with($option['name'], '(desativado)')))
+            ->assertSee('Horário inicial');
+    });
+
+    test('other fields are saved keeping the deactivated reason', function () {
+        ($this->screen)($this->hr)
+            ->call('editJustification', $this->justification->id)
+            ->set('justification.end_time', '08:30')
+            ->set('justification.observation', 'Conferido')
+            ->call('submitJustification')
+            ->assertHasNoErrors();
+
+        $fresh = $this->justification->fresh();
+
+        expect($fresh->reason_id)->toBe($this->intervalReason->id)
+            ->and($fresh->end_time)->toBe('08:30:00')
+            ->and($fresh->observation)->toBe('Conferido')
+            ->and($fresh->version)->toBe(2)
+            ->and($this->intervalReason->fresh()->active)->toBeFalse()
+            ->and(($this->catalog)())->toBe($this->catalogBefore);
+    });
+
+    test('switching to another active reason is allowed', function () {
+        $active = PointJustificationReason::factory()->create(['name' => 'Saída antecipada', 'time_mode' => JustificationTimeMode::Interval]);
+        $this->catalogBefore = ($this->catalog)();
+
+        ($this->screen)($this->hr)
+            ->call('editJustification', $this->justification->id)
+            ->set('justification.reason_id', $active->id)
+            ->set('justification.treatment', 'full_allowance')
+            ->set('justification.start_time', '16:00')
+            ->set('justification.end_time', '17:00')
+            ->call('submitJustification')
+            ->assertHasNoErrors();
+
+        expect($this->justification->fresh()->reason_id)->toBe($active->id)
+            ->and(($this->catalog)())->toBe($this->catalogBefore);
+    });
+
+    test('another deactivated reason cannot be selected, on the screen or in the service', function () {
+        ($this->screen)($this->hr)
+            ->call('editJustification', $this->justification->id)
+            ->set('justification.reason_id', $this->inactiveReason->id)
+            ->assertViewHas('selectedReason', null)
+            ->assertViewHas('reasonOptions', fn (array $options) => ! collect($options)->contains('id', $this->inactiveReason->id))
+            ->set('justification.treatment', 'full_allowance')
+            ->set('justification.start_time', '07:30')
+            ->set('justification.end_time', '08:00')
+            ->call('submitJustification')
+            ->assertHasErrors(['justification.reason_id']);
+
+        expect(fn () => app(PointJustificationService::class)->update($this->justification, [
+            'reason_id' => $this->inactiveReason->id, 'treatment' => 'full_allowance', 'start_time' => '07:30', 'end_time' => '08:00',
+        ], 1, $this->hr))->toThrow(ValidationException::class);
+
+        expect($this->justification->fresh()->reason_id)->toBe($this->intervalReason->id)
+            ->and($this->justification->fresh()->version)->toBe(1);
+    });
+
+    test('a new justification never accepts a deactivated reason, not even the one kept by another record', function () {
+        ($this->screen)($this->hr)
+            ->call('openJustificationForm')
+            ->assertViewHas('reasonOptions', fn (array $options) => ! collect($options)->contains('id', $this->intervalReason->id))
+            ->set('justification.reason_id', $this->intervalReason->id)
+            ->set('justification.treatment', 'full_allowance')
+            ->set('justification.start_time', '09:00')
+            ->set('justification.end_time', '10:00')
+            ->call('submitJustification')
+            ->assertHasErrors(['justification.reason_id']);
+
+        expect(PointJustification::query()->count())->toBe(1)
+            ->and(($this->catalog)())->toBe($this->catalogBefore);
+    });
 });

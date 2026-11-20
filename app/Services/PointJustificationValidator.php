@@ -24,7 +24,8 @@ use Illuminate\Validation\ValidationException;
  * de gravação, para que as regras não dependam da interface.
  *
  * Regras:
- * - Motivo ativo; tratamento permitido pelo motivo e suportado (sem banco de horas).
+ * - Motivo ativo (na edição, também o motivo atual da justificativa, ainda que
+ *   desativado); tratamento permitido pelo motivo e suportado (sem banco de horas).
  * - Horários conforme o modo do motivo (JustificationTimeMode):
  *   - FullDay: sem horários; duração = jornada prevista do dia (nula sem jornada).
  *   - Interval: início e fim H:i; fim posterior ao início, ou anterior/igual com
@@ -49,11 +50,12 @@ class PointJustificationValidator
     /**
      * @param  array<string, mixed>  $input  reason_id, treatment, full_day, start_time, end_time, ends_next_day, punch_kind, allowed_minutes, observation, request_uuid
      * @param  bool  $checkRequestUuid  false somente para comparar um reenvio com a justificativa já gravada pelo mesmo identificador.
+     * @param  int|null  $keptReasonId  Na edição, o motivo atual da justificativa: aceito mesmo desativado, para que os demais campos possam ser salvos. Qualquer outro motivo precisa estar ativo.
      * @return array{reason: PointJustificationReason, closed_period: ?BenefitPeriod, attributes: array<string, mixed>}
      *
      * @throws ValidationException
      */
-    public function validate(Employee $employee, string $date, array $input, User $user, bool $checkRequestUuid = true): array
+    public function validate(Employee $employee, string $date, array $input, User $user, bool $checkRequestUuid = true, ?int $keptReasonId = null): array
     {
         $occurrenceDate = $this->parsedDate($date);
 
@@ -61,7 +63,7 @@ class PointJustificationValidator
             throw ValidationException::withMessages(['occurrence_date' => 'Data da ocorrência inválida.']);
         }
 
-        $reason = PointJustificationReason::query()->active()->find($input['reason_id'] ?? null);
+        $reason = $this->selectableReason($input['reason_id'] ?? null, $keptReasonId);
 
         Validator::make($input, [
             'reason_id' => ['required', 'integer'],
@@ -118,6 +120,21 @@ class PointJustificationValidator
                 'request_uuid' => (string) $input['request_uuid'],
             ],
         ];
+    }
+
+    /**
+     * Motivo ativo com o identificador informado ou, na edição, o motivo atual da
+     * justificativa ainda que desativado. Outro motivo desativado não é encontrado.
+     */
+    public function selectableReason(mixed $reasonId, ?int $keptReasonId = null): ?PointJustificationReason
+    {
+        if (! is_numeric($reasonId)) {
+            return null;
+        }
+
+        return PointJustificationReason::query()
+            ->where(fn ($query) => $query->where('active', true)->when($keptReasonId !== null, fn ($query) => $query->orWhere('id', $keptReasonId)))
+            ->find((int) $reasonId);
     }
 
     /**

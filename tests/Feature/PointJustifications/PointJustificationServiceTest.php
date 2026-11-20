@@ -415,9 +415,9 @@ describe('security', function () {
         BenefitPeriod::factory()->forCompetence('2026-10')->create();
         app()->instance(PointJustificationValidator::class, new class extends PointJustificationValidator
         {
-            public function validate(Employee $employee, string $date, array $input, User $user, bool $checkRequestUuid = true): array
+            public function validate(Employee $employee, string $date, array $input, User $user, bool $checkRequestUuid = true, ?int $keptReasonId = null): array
             {
-                $result = parent::validate($employee, $date, $input, $user, $checkRequestUuid);
+                $result = parent::validate($employee, $date, $input, $user, $checkRequestUuid, $keptReasonId);
                 BenefitPeriod::query()->update(['status' => 'closed']);
 
                 return $result;

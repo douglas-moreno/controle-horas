@@ -55,6 +55,26 @@ class EmployeePointsEdit extends Component
      */
     public array $justification = [];
 
+    /**
+     * Justificativa em edição (null num novo cadastro) e a versão lida ao abrir o
+     * formulário, conferida pelo serviço contra alterações concorrentes.
+     */
+    #[Locked]
+    public ?int $editingJustificationId = null;
+
+    #[Locked]
+    public ?int $editingVersion = null;
+
+    public bool $showCancelJustificationModal = false;
+
+    #[Locked]
+    public ?int $cancelingJustificationId = null;
+
+    #[Locked]
+    public ?int $cancelingVersion = null;
+
+    public string $cancellationReason = '';
+
     public function addPoint()
     {
         $this->showAddPointModal = true;
@@ -88,8 +108,9 @@ class EmployeePointsEdit extends Component
      * Exclui uma batida manual do funcionário e da data da tela. A verificação é feita
      * no servidor: batidas de outro funcionário ou data, batidas importadas do relógio e
      * batidas manuais mantidas por decisão do RH (pendência histórica do AFD) e batidas
-     * referenciadas por anotação do RH (original de uma duplicada) são recusadas mesmo quando
-     * o método é chamado diretamente.
+     * referenciadas por anotação do RH (original de uma duplicada) e batidas vinculadas a uma
+     * justificativa ativa (tratadas pela edição ou cancelamento da justificativa) são
+     * recusadas mesmo quando o método é chamado diretamente.
      */
     public function removePoint($pointId)
     {
@@ -134,6 +155,15 @@ class EmployeePointsEdit extends Component
             return;
         }
 
+        if ($point->isLinkedToActiveJustification()) {
+            $this->notification()->error(
+                $title = 'Exclusão Não Permitida',
+                $description = Point::LINKED_TO_JUSTIFICATION_MESSAGE
+            );
+
+            return;
+        }
+
         $point->delete();
         $this->points = $this->points->filter(function ($p) use ($point) {
             return $p->id !== $point->id;
@@ -155,7 +185,103 @@ class EmployeePointsEdit extends Component
         $this->resetValidation();
         $this->justification = self::emptyJustification();
         $this->justificationRequestUuid = (string) Str::uuid();
+        $this->editingJustificationId = null;
+        $this->editingVersion = null;
         $this->showJustificationModal = true;
+    }
+
+    /**
+     * Abre a edição de uma justificativa ativa do funcionário nesta data, guardando a
+     * versão lida para a verificação de concorrência no salvamento.
+     */
+    public function editJustification(int $justificationId): void
+    {
+        $this->authorize('manage-point-justifications');
+
+        $justification = $this->screenJustification($justificationId);
+
+        if ($justification === null) {
+            return;
+        }
+
+        $this->resetValidation();
+        $this->justification = [
+            ...self::emptyJustification(),
+            'occurrence_date' => $justification->occurrence_date->toDateString(),
+            'reason_id' => $justification->reason_id,
+            'treatment' => $justification->treatment->value,
+            'full_day' => $justification->start_time === null,
+            'start_time' => $justification->start_time === null ? null : substr($justification->start_time, 0, 5),
+            'end_time' => $justification->end_time === null ? null : substr($justification->end_time, 0, 5),
+            'ends_next_day' => $justification->ends_next_day,
+            'punch_kind' => $justification->punch_kind?->value,
+            'allowed_minutes' => $justification->allowed_minutes,
+            'observation' => (string) $justification->observation,
+        ];
+        $this->editingJustificationId = $justification->id;
+        $this->editingVersion = $justification->version;
+        $this->showJustificationModal = true;
+    }
+
+    /**
+     * Abre a confirmação do cancelamento, que exige o motivo.
+     */
+    public function confirmCancelJustification(int $justificationId): void
+    {
+        $this->authorize('manage-point-justifications');
+
+        $justification = $this->screenJustification($justificationId);
+
+        if ($justification === null) {
+            return;
+        }
+
+        $this->resetValidation();
+        $this->cancellationReason = '';
+        $this->cancelingJustificationId = $justification->id;
+        $this->cancelingVersion = $justification->version;
+        $this->showCancelJustificationModal = true;
+    }
+
+    /**
+     * Cancela a justificativa pelo PointJustificationService (marcação vinculada removida
+     * quando não protegida). Só confirma depois da gravação.
+     */
+    public function cancelJustification(PointJustificationService $service): void
+    {
+        $this->authorize('manage-point-justifications');
+        $this->resetValidation();
+
+        $justification = $this->cancelingJustificationId === null ? null : $this->screenJustification($this->cancelingJustificationId, activeOnly: false);
+
+        if ($justification === null) {
+            $this->showCancelJustificationModal = false;
+
+            return;
+        }
+
+        try {
+            $canceled = $service->cancel($justification, $this->cancellationReason, (int) $this->cancelingVersion, auth()->user());
+        } catch (ValidationException $exception) {
+            throw ValidationException::withMessages(collect($exception->errors())
+                ->mapWithKeys(fn (array $messages, string $key) => [($key === 'cancellation_reason' ? 'cancellationReason' : 'cancellation.'.$key) => $messages])
+                ->all());
+        } catch (DomainException $exception) {
+            $this->addError('cancellation.form', $exception->getMessage());
+
+            return;
+        }
+
+        $this->showCancelJustificationModal = false;
+        $this->cancelingJustificationId = null;
+        $this->cancelingVersion = null;
+        $this->cancellationReason = '';
+        $this->loadPoints();
+
+        $this->notification()->success(
+            $title = 'Justificativa Cancelada',
+            $canceled->reason->name.($justification->manual_point_id !== null ? ' — marcação manual vinculada removida.' : '.')
+        );
     }
 
     /**
@@ -175,6 +301,7 @@ class EmployeePointsEdit extends Component
 
         $this->justification = [
             ...self::emptyJustification(),
+            'occurrence_date' => $this->justification['occurrence_date'] ?? null,
             'reason_id' => $this->justification['reason_id'] ?? null,
             'treatment' => in_array($default, $treatments, true) ? $default->value : ($treatments[0]->value ?? null),
             'observation' => $this->justification['observation'] ?? '',
@@ -192,6 +319,12 @@ class EmployeePointsEdit extends Component
     {
         $this->authorize('manage-point-justifications');
         $this->resetValidation();
+
+        if ($this->editingJustificationId !== null) {
+            $this->saveJustificationChanges($service);
+
+            return;
+        }
 
         try {
             $result = $service->register($this->employee, (string) $this->date, [
@@ -224,6 +357,70 @@ class EmployeePointsEdit extends Component
     }
 
     /**
+     * Salva a edição pelo PointJustificationService, com a versão lida ao abrir o formulário.
+     */
+    private function saveJustificationChanges(PointJustificationService $service): void
+    {
+        $justification = $this->screenJustification($this->editingJustificationId, activeOnly: false);
+
+        if ($justification === null) {
+            $this->showJustificationModal = false;
+
+            return;
+        }
+
+        try {
+            $result = $service->update($justification, $this->justification, (int) $this->editingVersion, auth()->user());
+        } catch (ValidationException $exception) {
+            throw ValidationException::withMessages(collect($exception->errors())
+                ->mapWithKeys(fn (array $messages, string $key) => ['justification.'.$key => $messages])
+                ->all());
+        } catch (DomainException $exception) {
+            $this->addError('justification.form', $exception->getMessage());
+
+            return;
+        }
+
+        $this->showJustificationModal = false;
+        $this->justification = self::emptyJustification();
+        $this->editingJustificationId = null;
+        $this->editingVersion = null;
+        $this->loadPoints();
+
+        if ($result['changed']) {
+            $this->notification()->success($title = 'Justificativa Alterada', $result['justification']->reason->name.'.');
+        } else {
+            $this->notification()->info($title = 'Nenhuma Alteração', 'Os dados informados são iguais aos gravados.');
+        }
+    }
+
+    /**
+     * Justificativa do funcionário da tela, nesta data. Avisa e devolve null quando não
+     * pertence à tela ou, com `$activeOnly`, quando já está cancelada.
+     */
+    private function screenJustification(?int $justificationId, bool $activeOnly = true): ?PointJustification
+    {
+        $justification = PointJustification::query()
+            ->where('employee_id', $this->employee->id)
+            ->whereDate('occurrence_date', $this->date)
+            ->find($justificationId);
+
+        if ($justification === null) {
+            $this->notification()->error($title = 'Operação Não Permitida', 'A justificativa não pertence a este funcionário nesta data.');
+
+            return null;
+        }
+
+        if ($activeOnly && $justification->isCanceled()) {
+            $this->notification()->error($title = 'Operação Não Permitida', 'Esta justificativa está cancelada.');
+
+            return null;
+        }
+
+        return $justification;
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private static function emptyJustification(): array
@@ -245,7 +442,22 @@ class EmployeePointsEdit extends Component
     {
         $reasonId = $this->justification['reason_id'] ?? null;
 
-        return $reasonId === null || $reasonId === '' ? null : PointJustificationReason::query()->active()->find($reasonId);
+        return $reasonId === null || $reasonId === '' ? null : app(PointJustificationValidator::class)->selectableReason($reasonId, $this->keptReasonId());
+    }
+
+    /**
+     * Motivo atual da justificativa em edição, aceito mesmo desativado (lido do banco,
+     * nunca do formulário).
+     */
+    private function keptReasonId(): ?int
+    {
+        if ($this->editingJustificationId === null) {
+            return null;
+        }
+
+        $reasonId = PointJustification::query()->where('employee_id', $this->employee->id)->whereKey($this->editingJustificationId)->value('reason_id');
+
+        return $reasonId === null ? null : (int) $reasonId;
     }
 
     /**
@@ -260,20 +472,22 @@ class EmployeePointsEdit extends Component
         }
 
         $reason = $this->selectedReason();
+        $keptReasonId = $this->keptReasonId();
 
         return [
             'canManageJustifications' => true,
             'justifications' => PointJustification::query()
-                ->with(['reason', 'creator'])
+                ->with(['reason', 'creator', 'updater', 'canceler'])
                 ->where('employee_id', $this->employee->id)
                 ->whereDate('occurrence_date', $this->date)
                 ->orderBy('start_time')
                 ->orderBy('id')
                 ->get(),
-            'reasonOptions' => PointJustificationReason::query()->active()
+            'reasonOptions' => PointJustificationReason::query()
+                ->where(fn ($query) => $query->where('active', true)->when($keptReasonId !== null, fn ($query) => $query->orWhere('id', $keptReasonId)))
                 ->orderBy('category')->orderBy('sort_order')->orderBy('name')
                 ->get()
-                ->map(fn (PointJustificationReason $option) => ['id' => $option->id, 'name' => $option->category->label().' — '.$option->name])
+                ->map(fn (PointJustificationReason $option) => ['id' => $option->id, 'name' => $option->category->label().' — '.$option->name.($option->active ? '' : ' (desativado)')])
                 ->all(),
             'selectedReason' => $reason,
             'treatmentOptions' => collect($reason?->treatments() ?? [])
@@ -291,6 +505,11 @@ class EmployeePointsEdit extends Component
             'showsSinglePunch' => $reason?->time_mode === JustificationTimeMode::SinglePunch,
             'showsAllowedMinutes' => ($this->justification['treatment'] ?? null) === JustificationTreatment::PartialAllowance->value,
             'closedPeriod' => app(PointJustificationValidator::class)->closedPeriodFor(Carbon::parse($this->date)->toImmutable()),
+            'isEditingJustification' => $this->editingJustificationId !== null,
+            'cancelingJustification' => $this->cancelingJustificationId === null ? null : PointJustification::query()
+                ->with(['reason', 'manualPoint'])
+                ->where('employee_id', $this->employee->id)
+                ->find($this->cancelingJustificationId),
         ];
     }
 
@@ -317,6 +536,11 @@ class EmployeePointsEdit extends Component
             'date' => $this->date,
             'points' => $this->points,
             'annotationLabels' => AfdPointDecision::activeLabels(collect($this->points)->pluck('id')->map(fn ($id) => (int) $id)->all()),
+            'justifiedPointIds' => PointJustification::query()->active()
+                ->whereIn('manual_point_id', collect($this->points)->pluck('id'))
+                ->pluck('manual_point_id')
+                ->map(fn ($id) => (int) $id)
+                ->all(),
             'retainedPointIds' => AfdHistoricalNsr::query()
                 ->whereIn('related_manual_point_id', collect($this->points)->pluck('id'))
                 ->where('status', AfdHistoricalNsr::STATUS_MANUAL_RETAINED)

@@ -1,4 +1,4 @@
-# Justificativas do controle de ponto (F1: estrutura e permissões; F2: tela e validação; F3: gravação e efeitos)
+# Justificativas do controle de ponto (F1: estrutura e permissões; F2: tela e validação; F3: gravação e efeitos; F4: edição e cancelamento)
 
 ## 1. Objetivo e escopo
 
@@ -7,8 +7,9 @@ Registrar, na tela `points-edit` (botão de edição de cada dia na tela de hora
 - **F1** — catálogo de motivos, tabelas, histórico append-only e permissões.
 - **F2** — `ManualPointRegistrar`, seção de justificativas na tela e validação no servidor.
 - **F3** — gravação pelo `PointJustificationService`: idempotência, sobreposição, competência fechada, criação da batida manual com classificação pela sequência do dia e histórico.
+- **F4** — edição e cancelamento, com controle otimista pela `version`, movimentação e remoção controladas da batida vinculada e histórico.
 
-Fora do escopo até aqui: edição e cancelamento (F4), efeito no espelho de ponto e banco de horas (F5), documentos comprobatórios (política do RH pendente).
+Fora do escopo até aqui: efeito no espelho de ponto e banco de horas (F5), documentos comprobatórios (política do RH pendente).
 
 ## 2. Permissões
 
@@ -16,12 +17,12 @@ Permissões individuais em `users.permissions` (JSON). Usuários existentes come
 
 | Permissão | Gate | Uso |
 |---|---|---|
-| `hr` | `manage-point-justifications` | Consultar, registrar (e, na F4, editar e cancelar) justificativas |
+| `hr` | `manage-point-justifications` | Consultar, registrar, editar e cancelar justificativas |
 | `hr.closed_period` | `change-closed-period-justifications` | Operar em competência fechada; só vale junto com `hr` |
 
 Concessão: `php artisan users:permissions email@empresa --grant=hr [--grant=hr.closed_period]`; retirada com `--revoke`.
 
-A rota `points-edit` continua aberta: incluir e remover batida manual seguem as regras anteriores. Só a seção de justificativas exige `hr`, verificada no servidor em cada método Livewire e no serviço.
+A rota `points-edit` continua aberta: incluir e remover batida manual seguem as regras anteriores, exceto a batida vinculada a uma justificativa ativa, que não pode ser excluída por esse fluxo (seção 11). Só a seção de justificativas exige `hr`, verificada no servidor em cada método Livewire e no serviço.
 
 ## 3. Modelo de dados
 
@@ -39,7 +40,7 @@ Tratamentos: abonar integralmente, abonar parcialmente (exige minutos), não abo
 
 ## 5. Validação (`PointJustificationValidator`)
 
-- Motivo existente e ativo; tratamento válido, suportado e permitido pelo motivo.
+- Motivo existente e ativo (na edição, também o motivo atual da justificativa, ainda que desativado; seção 10); tratamento válido, suportado e permitido pelo motivo.
 - Horários conforme `time_mode`:
   - dia inteiro: sem horários; duração = jornada prevista do dia (`config/timesheet.php`), nula sem jornada;
   - intervalo: início e fim `H:i`; fim posterior ao início, ou anterior/igual com "termina no dia seguinte" (até 24 h); duração calculada;
@@ -91,13 +92,46 @@ A posição da nova batida entre todas as batidas do funcionário na data (impor
 
 A data de trabalho é a data civil da batida, como no espelho (`TimesheetMirror` agrupa por `points.date`): numa jornada que atravessa a meia-noite, a batida depois de 00:00 é classificada no dia seguinte. Nenhuma batida existente é alterada.
 
-## 10. Testes
+## 10. Edição (`PointJustificationService::update`)
 
-MySQL 8 no banco `testing`; `Tests\TestCase` aborta qualquer outra conexão antes das migrations. Arquivos em `tests/Feature/PointJustifications/`, `ManualPointRegistrarTest` e `EmployeePointsEditTest`. A concorrência é testada com processos PHP reais (`tests/Support/register-justification.php`, `DatabaseTruncation`) que largam no mesmo instante e atrasam a gravação dentro da transação; sem o bloqueio do funcionário, esses testes falham.
+O formulário de edição carrega os valores e a `version` lida (propriedades `#[Locked]`). Em uma transação:
 
-## 11. Pendências
+1. Gate `manage-point-justifications`.
+2. `lockForUpdate` no funcionário e depois na justificativa (mesma ordem do registro).
+3. Cancelada: recusa. Versão diferente da recebida: recusa com "A justificativa foi alterada por outro usuário…", sem gravar nada.
+4. Revalidação completa (seção 5), inclusive a nova data (`occurrence_date`, opcional). O motivo atual é aceito mesmo desativado, para salvar os demais campos sem trocá-lo; ele não é reativado nem alterado no catálogo. Trocar de motivo exige um motivo ativo; o motivo aceito é lido do banco (justificativa em edição), não do formulário. Novas justificativas aceitam somente motivos ativos.
+5. Sem nenhuma diferença nos campos: nada é gravado (nem versão, nem histórico).
+6. Sobreposição sem contar a própria justificativa.
+7. Competências anterior e nova relidas com `sharedLock`; qualquer uma fechada exige `hr.closed_period`.
+8. Batida vinculada:
+   - motivo que cria batida e batida existente: reclassificada pela sequência da data (sem contar ela mesma) e, se a data ou o horário mudarem, movida pelo `ManualPointRegistrar::move` (manual, do funcionário, sem proteção do RH, sem duplicidade no minuto);
+   - motivo que cria batida sem batida vinculada: criada como no registro;
+   - novo motivo que não cria batida com batida vinculada: recusado (a remoção só acontece no cancelamento).
+9. `version + 1`, `updated_by`.
+10. Histórico `updated` (valores anteriores e novos, retratos da batida antes e depois, competências, campos alterados na descrição) e, conforme o caso, `manual_point_updated` (retratos antes e depois) ou `manual_point_created`.
+
+## 11. Cancelamento (`PointJustificationService::cancel`)
+
+Motivo obrigatório (até 1000 caracteres, sem espaços nas pontas). Em uma transação:
+
+1. Gate; bloqueio do funcionário e da justificativa.
+2. Já cancelada: recusa ("Esta justificativa já foi cancelada."). Versão divergente: recusa.
+3. Competência relida com `sharedLock`; fechada exige `hr.closed_period`.
+4. Batida vinculada protegida (mantida por decisão do RH ou anotada) ou não manual: **nada é cancelado**, com o motivo do bloqueio. A proteção não é alterada.
+5. Retrato integral da batida.
+6. `canceled_at`, `canceled_by`, `cancellation_reason`, `version + 1`; depois, remoção da batida pelo `ManualPointRegistrar::remove`. A justificativa nunca é apagada.
+7. Histórico `canceled` (valores anteriores e novos, retrato da batida) e `manual_point_removed` (retrato).
+
+Batida vinculada já removida por outro caminho (dados anteriores à F4) não impede o cancelamento.
+
+**Exclusão manual de batida vinculada:** bloqueada no modelo `Point` (evento `deleting`: batida vinculada a justificativa ativa), valendo para a tela, para o `ManualPointRegistrar` e para qualquer exclusão pelo Eloquent; a tela também recusa com mensagem própria e mostra "Justificativa" no lugar do botão de exclusão. Por isso o cancelamento marca a justificativa como cancelada antes de remover a batida. Exclusões diretas pelo query builder ou SQL não passam pela proteção.
+
+## 12. Testes
+
+MySQL 8 no banco `testing`; `Tests\TestCase` aborta qualquer outra conexão antes das migrations. Arquivos em `tests/Feature/PointJustifications/`, `ManualPointRegistrarTest` e `EmployeePointsEditTest`. A concorrência é testada com processos PHP reais (`tests/Support/register-justification.php`, `DatabaseTruncation`) que largam no mesmo instante e atrasam a gravação dentro da transação: registro, edições simultâneas da mesma versão, cancelamentos simultâneos e edição contra cancelamento. Sem os bloqueios, esses testes falham.
+
+## 13. Pendências
 
 - Matriz motivo × tratamento e exigência documental (RH).
-- Edição e cancelamento com tratamento da batida vinculada (F4).
 - Efeito no espelho (abono do atraso, dia fora de conferência) e unificação da leitura da jornada prevista com o `TimesheetMirror` (F5).
-- Validação visual no navegador (depende de ambiente com migrations, catálogo e permissão `hr`).
+- Validação visual da edição e do cancelamento no navegador.
