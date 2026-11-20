@@ -100,3 +100,26 @@ test('a manual punch can be removed again once the HR decision no longer keeps i
 
     $this->assertModelMissing($this->manualPoint);
 });
+
+test('a manual punch at the same minute of an existing punch is refused', function () {
+    ($this->screen)()
+        ->call('addPoint')
+        ->set('newPointTime', '08:00')
+        ->call('saveNewPoint')
+        ->assertHasErrors(['newPointTime'])
+        ->assertSet('showAddPointModal', true);
+
+    expect(Point::query()->where('pis', $this->employee->pis)->count())->toBe(2);
+});
+
+test('the time of a new manual punch is still required and validated', function (?string $time) {
+    ($this->screen)()
+        ->set('newPointTime', $time)
+        ->call('saveNewPoint')
+        ->assertHasErrors(['newPointTime']);
+
+    expect(Point::query()->count())->toBe(2);
+})->with([
+    'empty' => [null],
+    'invalid' => ['25:99'],
+]);

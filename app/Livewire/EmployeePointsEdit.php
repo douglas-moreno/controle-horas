@@ -2,10 +2,22 @@
 
 namespace App\Livewire;
 
+use App\Enums\JustificationTimeMode;
+use App\Enums\JustificationTreatment;
+use App\Enums\PunchKind;
 use App\Models\AfdHistoricalNsr;
 use App\Models\AfdPointDecision;
 use App\Models\Employee;
 use App\Models\Point;
+use App\Models\PointJustification;
+use App\Models\PointJustificationReason;
+use App\Services\ManualPointRegistrar;
+use App\Services\PointJustificationValidator;
+use DomainException;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\Locked;
 use Livewire\Component;
 use WireUi\Traits\WireUiActions;
@@ -26,6 +38,22 @@ class EmployeePointsEdit extends Component
 
     public $newPointTime;
 
+    public bool $showJustificationModal = false;
+
+    /**
+     * Identificador da tentativa de cadastro, renovado a cada novo formulário. Protege
+     * contra a gravação duplicada do mesmo envio (UNIQUE em point_justifications).
+     */
+    #[Locked]
+    public ?string $justificationRequestUuid = null;
+
+    /**
+     * Campos do formulário de justificativa.
+     *
+     * @var array<string, mixed>
+     */
+    public array $justification = [];
+
     public function addPoint()
     {
         $this->showAddPointModal = true;
@@ -37,12 +65,13 @@ class EmployeePointsEdit extends Component
             'newPointTime' => 'required|date_format:H:i',
         ]);
 
-        $newPoint = Point::create([
-            'pis' => $this->employee->pis,
-            'date' => $this->date,
-            'time' => $this->newPointTime.':00',
-            'type' => 'manual',
-        ]);
+        try {
+            $newPoint = app(ManualPointRegistrar::class)->register($this->employee, (string) $this->date, (string) $this->newPointTime);
+        } catch (DomainException $exception) {
+            $this->addError('newPointTime', $exception->getMessage());
+
+            return;
+        }
 
         $this->points->push($newPoint);
         $this->showAddPointModal = false;
@@ -115,6 +144,137 @@ class EmployeePointsEdit extends Component
         );
     }
 
+    /**
+     * Abre um novo cadastro de justificativa, com novo identificador de operação.
+     */
+    public function openJustificationForm(): void
+    {
+        $this->authorize('manage-point-justifications');
+
+        $this->resetValidation();
+        $this->justification = self::emptyJustification();
+        $this->justificationRequestUuid = (string) Str::uuid();
+        $this->showJustificationModal = true;
+    }
+
+    /**
+     * Ao trocar o motivo, aplica o tratamento padrão (se permitido) e limpa os horários.
+     */
+    public function updatedJustification(mixed $value, string $key): void
+    {
+        if ($key !== 'reason_id') {
+            return;
+        }
+
+        $this->authorize('manage-point-justifications');
+
+        $reason = $this->selectedReason();
+        $treatments = $reason?->treatments() ?? [];
+        $default = $reason?->default_treatment;
+
+        $this->justification = [
+            ...self::emptyJustification(),
+            'reason_id' => $this->justification['reason_id'] ?? null,
+            'treatment' => in_array($default, $treatments, true) ? $default->value : ($treatments[0]->value ?? null),
+            'observation' => $this->justification['observation'] ?? '',
+        ];
+        $this->resetValidation();
+    }
+
+    /**
+     * Valida a justificativa no servidor. A gravação e seus efeitos ficam para a F3: com os
+     * dados válidos, nada é gravado e o identificador da operação é mantido.
+     */
+    public function submitJustification(PointJustificationValidator $validator): void
+    {
+        $this->authorize('manage-point-justifications');
+        $this->resetValidation();
+
+        try {
+            $validator->validate($this->employee, (string) $this->date, [
+                ...$this->justification,
+                'request_uuid' => $this->justificationRequestUuid,
+            ], auth()->user());
+        } catch (ValidationException $exception) {
+            throw ValidationException::withMessages(collect($exception->errors())
+                ->mapWithKeys(fn (array $messages, string $key) => ['justification.'.$key => $messages])
+                ->all());
+        }
+
+        $this->addError('justification.form', 'Dados válidos, mas a gravação de justificativas ainda não está disponível. Nada foi registrado.');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function emptyJustification(): array
+    {
+        return [
+            'reason_id' => null,
+            'treatment' => null,
+            'full_day' => true,
+            'start_time' => null,
+            'end_time' => null,
+            'ends_next_day' => false,
+            'punch_kind' => null,
+            'allowed_minutes' => null,
+            'observation' => '',
+        ];
+    }
+
+    private function selectedReason(): ?PointJustificationReason
+    {
+        $reasonId = $this->justification['reason_id'] ?? null;
+
+        return $reasonId === null || $reasonId === '' ? null : PointJustificationReason::query()->active()->find($reasonId);
+    }
+
+    /**
+     * Dados da seção de justificativas; vazios para quem não tem a permissão do RH.
+     *
+     * @return array<string, mixed>
+     */
+    private function justificationViewData(): array
+    {
+        if (! Gate::allows('manage-point-justifications')) {
+            return ['canManageJustifications' => false];
+        }
+
+        $reason = $this->selectedReason();
+
+        return [
+            'canManageJustifications' => true,
+            'justifications' => PointJustification::query()
+                ->with(['reason', 'creator'])
+                ->where('employee_id', $this->employee->id)
+                ->whereDate('occurrence_date', $this->date)
+                ->orderBy('start_time')
+                ->orderBy('id')
+                ->get(),
+            'reasonOptions' => PointJustificationReason::query()->active()
+                ->orderBy('category')->orderBy('sort_order')->orderBy('name')
+                ->get()
+                ->map(fn (PointJustificationReason $option) => ['id' => $option->id, 'name' => $option->category->label().' — '.$option->name])
+                ->all(),
+            'selectedReason' => $reason,
+            'treatmentOptions' => collect($reason?->treatments() ?? [])
+                ->map(fn (JustificationTreatment $treatment) => ['id' => $treatment->value, 'name' => $treatment->label()])
+                ->all(),
+            'punchKindOptions' => collect(PunchKind::cases())
+                ->map(fn (PunchKind $kind) => ['id' => $kind->value, 'name' => $kind->label()])
+                ->all(),
+            'showsFullDayChoice' => $reason?->time_mode === JustificationTimeMode::FullDayOrInterval,
+            'showsInterval' => $reason !== null && match ($reason->time_mode) {
+                JustificationTimeMode::Interval => true,
+                JustificationTimeMode::FullDayOrInterval => ! filter_var($this->justification['full_day'] ?? true, FILTER_VALIDATE_BOOLEAN),
+                default => false,
+            },
+            'showsSinglePunch' => $reason?->time_mode === JustificationTimeMode::SinglePunch,
+            'showsAllowedMinutes' => ($this->justification['treatment'] ?? null) === JustificationTreatment::PartialAllowance->value,
+            'closedPeriod' => app(PointJustificationValidator::class)->closedPeriodFor(Carbon::parse($this->date)->toImmutable()),
+        ];
+    }
+
     public function mount($employee, $date)
     {
         $this->employee = Employee::find($employee);
@@ -139,6 +299,7 @@ class EmployeePointsEdit extends Component
                 ->pluck('related_manual_point_id')
                 ->map(fn ($id) => (int) $id)
                 ->all(),
+            ...$this->justificationViewData(),
         ]);
     }
 }
