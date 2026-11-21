@@ -104,3 +104,15 @@ test('holiday lookup ignores empty and invalid dates', function () {
         ->and(Holiday::isHoliday(''))->toBeFalse()
         ->and(Holiday::isHoliday('data-invalida'))->toBeFalse();
 });
+
+test('the holiday list shows 50 holidays per page', function () {
+    foreach (range(0, 50) as $day) {
+        Holiday::create(['date' => now()->startOfYear()->addDays($day)->toDateString(), 'description' => 'Feriado '.$day]);
+    }
+
+    $holidays = Livewire::test(HolidayIndex::class)->viewData('holidays');
+
+    expect($holidays->perPage())->toBe(50)
+        ->and($holidays->count())->toBe(50)
+        ->and($holidays->total())->toBe(51);
+});

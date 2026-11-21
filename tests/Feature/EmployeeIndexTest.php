@@ -159,3 +159,13 @@ test('an unexpected failure shows a generic message without sql, bindings or pis
     'database error with bindings' => fn () => new QueryException('mysql', 'insert into points (pis) values (?)', [12345678901], new PDOException('SQLSTATE[23000]: valor 12345678901')),
     'runtime error' => fn () => new RuntimeException('/var/www/html/storage/app/private/livewire-tmp/arquivo.txt 12345678901'),
 ]);
+
+test('the employee list shows 50 employees per page', function () {
+    Employee::factory()->count(51)->create();
+
+    $employees = Livewire::test(EmployeeIndex::class)->viewData('employees');
+
+    expect($employees->perPage())->toBe(50)
+        ->and($employees->count())->toBe(50)
+        ->and($employees->total())->toBe(51);
+});

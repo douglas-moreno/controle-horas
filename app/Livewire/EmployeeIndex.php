@@ -191,7 +191,7 @@ class EmployeeIndex extends Component
                         ->orWhere('position', 'like', '%'.$this->search.'%');
                 });
             })->orderBy('name')
-            ->paginate(25);
+            ->paginate(50);
 
         return view('livewire.employee-index', [
             'employees' => $employees,

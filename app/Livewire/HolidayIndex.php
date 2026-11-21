@@ -48,7 +48,7 @@ class HolidayIndex extends Component
             ->when($this->year, fn ($query) => $query->whereYear('date', $this->year))
             ->when($this->search, fn ($query) => $query->where('description', 'like', '%'.$this->search.'%'))
             ->orderBy('date')
-            ->paginate(25);
+            ->paginate(50);
 
         $years = Holiday::query()
             ->orderBy('date')
