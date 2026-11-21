@@ -29,6 +29,7 @@ class BenefitSuggestionRunFactory extends Factory
             'created' => 0,
             'skipped_existing' => 0,
             'skipped_covered' => 0,
+            'skipped_justified' => 0,
             'skipped_unobserved_days' => 0,
         ];
     }

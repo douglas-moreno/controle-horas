@@ -6,6 +6,7 @@ use App\Enums\CalendarDayType;
 use App\Enums\TimesheetDayStatus;
 use App\Models\Employee;
 use Carbon\CarbonInterface;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -13,15 +14,18 @@ use Illuminate\Support\Facades\Log;
  * docs/espelho-ponto-regra-alternativa.md), usada pela tela e pelo CSV.
  *
  * Não calcula nada: lê os campos oficiais e a chave `alternative` produzidos pelo
- * TimesheetMirror para cada funcionário com marcações no período. Os funcionários
+ * TimesheetMirror para cada funcionário com marcações no período, com as justificativas
+ * ativas carregadas em uma consulta e aplicadas aos dois lados (D8): o abono não gera
+ * divergência artificial. Os funcionários
  * aparecem pelo código pseudonimizado (A8), sem nome nem PIS. Com a regra
  * alternativa desligada, nenhum dado de comparação é produzido.
  *
  * Dia divergente: com extra alternativo calculado, extra ou atraso diferente do
  * oficial (null é um valor próprio, ex.: atraso oficial não calculado em dia de 3
  * marcações); sem extra alternativo (conferência, sem marcação ou sem jornada),
- * somente quando o oficial não exige conferência. Ausências que as duas regras
- * deixam sem cálculo não são divergências.
+ * somente quando o oficial não exige conferência nem é ausência justificada (que as
+ * duas regras tratam igual). Ausências que as duas regras deixam sem cálculo não são
+ * divergências.
  *
  * Cada comparação registra no log a configuração de jornada usada (D4), o período,
  * a superfície e o usuário, ligada ou desligada.
@@ -32,6 +36,7 @@ class AlternativeComparison
         private TimesheetMirror $mirror,
         private AlternativeTimesheetRule $rule,
         private AlternativeEmployeeCode $codes,
+        private TimesheetJustifications $justifications,
     ) {}
 
     /**
@@ -53,9 +58,12 @@ class AlternativeComparison
         $days = [];
 
         if ($enabled && $start->toDateString() <= $end->toDateString()) {
-            foreach ($this->employeesWithPoints($start, $end) as $employee) {
+            $withPoints = $this->employeesWithPoints($start, $end);
+            $justificationsByEmployee = $this->justifications->forEmployees($withPoints->modelKeys(), $start, $end);
+
+            foreach ($withPoints as $employee) {
                 $code = $this->codes->for($employee->id);
-                $mirror = $this->mirror->build($employee->points, $start, $end);
+                $mirror = $this->mirror->build($employee->points, $start, $end, $justificationsByEmployee[$employee->id] ?? []);
                 $rows = array_map(fn (array $day) => $this->row($code, $day), $mirror['days']);
 
                 $employees[] = $this->summary($code, $mirror['totals'], $rows);
@@ -118,9 +126,9 @@ class AlternativeComparison
     }
 
     /**
-     * @return iterable<Employee>
+     * @return Collection<int, Employee>
      */
-    private function employeesWithPoints(CarbonInterface $start, CarbonInterface $end): iterable
+    private function employeesWithPoints(CarbonInterface $start, CarbonInterface $end): Collection
     {
         $between = [$start->format('Y-m-d'), $end->format('Y-m-d')];
 
@@ -159,7 +167,7 @@ class AlternativeComparison
             'alternative_delay_minutes' => $alternative['delay_minutes'],
             'alternative_delay' => $alternative['delay'],
             'divergent' => $alternative['overtime_minutes'] === null
-                ? ! $day['needs_review']
+                ? ! $day['needs_review'] && ! $day['justified']
                 : $day['overtime_minutes'] !== $alternative['overtime_minutes'] || $day['delay_minutes'] !== $alternative['delay_minutes'],
         ];
     }

@@ -1,4 +1,4 @@
-# Justificativas do controle de ponto (F1: estrutura e permissões; F2: tela e validação; F3: gravação e efeitos; F4: edição e cancelamento)
+# Justificativas do controle de ponto (F1: estrutura e permissões; F2: tela e validação; F3: gravação e efeitos; F4: edição e cancelamento; F5.1: abono no espelho; F5.2: regra alternativa, tela e impressão; F5.3: sugestões de benefícios; F5.4: documentação e regressão)
 
 ## 1. Objetivo e escopo
 
@@ -8,8 +8,10 @@ Registrar, na tela `points-edit` (botão de edição de cada dia na tela de hora
 - **F2** — `ManualPointRegistrar`, seção de justificativas na tela e validação no servidor.
 - **F3** — gravação pelo `PointJustificationService`: idempotência, sobreposição, competência fechada, criação da batida manual com classificação pela sequência do dia e histórico.
 - **F4** — edição e cancelamento, com controle otimista pela `version`, movimentação e remoção controladas da batida vinculada e histórico.
+- **F5.1** — abono do atraso e conferência de ausências no espelho de ponto (`TimesheetJustifications`), calculados na leitura.
+- **F5.2** — mesmo abono na regra alternativa e na comparação (D8); atraso bruto, abonado e líquido, motivo e período na tela de horas extras e na impressão (D9).
 
-Fora do escopo até aqui: efeito no espelho de ponto e banco de horas (F5), documentos comprobatórios (política do RH pendente).
+Fora do escopo até aqui: sugestões de ausência dos benefícios (F5.3), banco de horas, documentos comprobatórios (política do RH pendente).
 
 ## 2. Permissões
 
@@ -126,12 +128,60 @@ Batida vinculada já removida por outro caminho (dados anteriores à F4) não im
 
 **Exclusão manual de batida vinculada:** bloqueada no modelo `Point` (evento `deleting`: batida vinculada a justificativa ativa), valendo para a tela, para o `ManualPointRegistrar` e para qualquer exclusão pelo Eloquent; a tela também recusa com mensagem própria e mostra "Justificativa" no lugar do botão de exclusão. Por isso o cancelamento marca a justificativa como cancelada antes de remover a batida. Exclusões diretas pelo query builder ou SQL não passam pela proteção.
 
-## 12. Testes
+## 12. Efeito no espelho de ponto (F5.1, `TimesheetJustifications`)
+
+Calculado a cada leitura do espelho (`TimesheetMirror::forEmployee` e impressão), a partir das justificativas **ativas**; nada é gravado. Criar, editar, mudar a data ou cancelar uma justificativa vale na próxima leitura, sem recálculo e sem possibilidade de abono em dobro. Uma consulta de justificativas (mais a do motivo) por espelho ou por impressão, para todos os funcionários.
+
+**Abono do atraso** (somente em dia útil com atraso calculado, isto é, 2 ou 4 marcações):
+
+- só os tratamentos "Abonar integralmente" e "Abonar parcialmente"; "Não abonar" mantém o atraso;
+- trechos atrasados: entrada prevista → 1ª marcação e última marcação → saída prevista, em minutos de jornada (o intervalo previsto não conta); o retorno tardio do almoço não faz parte do atraso oficial e não é afetado;
+- período da justificativa: dia inteiro, intervalo (a parte depois da meia-noite de uma justificativa do dia anterior vale no dia seguinte) ou nenhum (marcação única não abona atraso);
+- integral: minutos do período dentro dos trechos atrasados; parcial: o menor entre os minutos informados e esse valor, primeiro na entrada e depois na saída;
+- o abono da entrada não passa do atraso na entrada (já descontada a tolerância) e o da saída não passa da saída antecipada: sem saldo negativo e sem crédito.
+
+Campos do dia: `delay_before_allowance_minutes` (bruto), `allowed_delay_minutes` (abonado), `delay_minutes` (líquido), `late_entry_minutes` e `early_leave_minutes` (brutos) e `justifications` (motivo, tratamento, período e minutos abonados de cada uma). Totais: os mesmos campos somados e `justified_days`.
+
+**Conferência:** dia útil sem marcação coberto por justificativa ativa de **dia inteiro** sai da conferência (`justified`), com qualquer tratamento suportado; a situação continua "sem marcação" e o rótulo vira "Justificado — motivo" (com "(não abonado)" quando for o caso). Justificativa de intervalo em dia sem marcação não tira da conferência, e a justificativa não esconde outras situações (marcações incompletas, excedentes, fora da jornada).
+
+Sem justificativas, o espelho é idêntico ao anterior. `TimesheetMirror::build()` sem justificativas (prévia das decisões do AFD) continua com o atraso bruto. Não há efeito em benefícios: o cálculo de benefícios não lê o espelho.
+
+**Regra alternativa e comparação (F5.2, D8):** a chave `alternative` recebe o mesmo abono, pela mesma função, sobre o atraso alternativo (entrada prevista → 1ª marcação considerada; última → saída prevista), com `delay_before_allowance_minutes`, `allowed_delay_minutes` e `delay_minutes` líquido, e o dia útil sem marcação justificado por dia inteiro também sai da conferência. A comparação carrega as justificativas em uma consulta e as aplica aos dois lados; ausência justificada não é divergência. O abono pode igualar dias em que as regras diferiam só no atraso (ex.: tolerância), porque os dois atrasos ficam zerados.
+
+**Apresentação (F5.2, D9):** o texto de cada justificativa é montado uma vez no espelho (`justification_notes`: "Abonado — motivo, período: HH:MM", "Não abonado — motivo, período" ou "Justificativa — motivo, período") e exibido igual na tela e na impressão.
+
+- Tela de horas extras: no card de atraso, "Atraso líquido" com o bruto e o abonado do período; na coluna Atraso do dia, bruto, abonado e líquido quando há abono; os textos das justificativas na coluna Ocorrência.
+- Impressão: coluna Atraso com o líquido (e "bruto/abon." em letra menor quando há abono); textos das justificativas na coluna "Justificativa da irregularidade"; na linha de totais, "Atraso bruto · abonado · líquido"; legenda explicando o atraso líquido.
+- Horas extras não mudam: o abono só atua sobre o atraso.
+
+## 12.1. Sugestões de benefícios (F5.3, `TimesheetAdjustmentSuggester`)
+
+- **Critério** (`TimesheetJustifications::suppressesAbsenceSuggestion`): justificativa ativa de dia inteiro, na própria data de ocorrência, com abono integral ou parcial. "Não abonar", intervalo, marcação única, canceladas, outro funcionário, outra data e a parte depois da meia-noite de uma justificativa noturna não contam.
+- **Carga:** `analyze()` lê as justificativas de todos os funcionários acompanhados com `forEmployees()` (uma consulta mais o motivo), usada pela geração e pelos conflitos.
+- **Geração:** dia útil sem batida coberto pelo critério não gera ausência injustificada e conta em `skipped_justified`. A verificação vem depois de `skipped_existing` (`dedupe_key`) e de `skipped_covered` (ajuste não rejeitado cobrindo o dia), que mantêm a semântica anterior; cada dia entra em um único contador. Sugestões de trabalho (sábado, domingo, feriado) não mudam. A cauda da competência anterior (compensações) não é suprimida.
+- **Conflito `absence_with_justification`** (informativo, calculado a cada consulta): sugestão do ponto de ausência injustificada não rejeitada (pendente ou confirmada, inclusive compensação) em dia coberto pelo critério. A mensagem traz funcionário, data, motivo, tratamento, número da justificativa e ajuste afetado. Nenhum ajuste é rejeitado, alterado ou excluído; o conflito some quando a justificativa é cancelada. Ausências manuais e sugestões com o motivo alterado na revisão não entram.
+- **Execuções:** migration `2026_11_20_232926_add_skipped_justified_to_benefit_suggestion_runs_table` (`unsigned int`, default 0, depois de `skipped_covered`; `down()` remove a coluna). Execuções anteriores ficam com 0. O contador aparece no resumo da geração, na notificação e na "Última execução".
+- Fora do escopo: `BenefitAdjustmentRegistrar`, `BenefitPeriodCalculator`, períodos e valores de benefícios.
+
+## 13. Testes
 
 MySQL 8 no banco `testing`; `Tests\TestCase` aborta qualquer outra conexão antes das migrations. Arquivos em `tests/Feature/PointJustifications/`, `ManualPointRegistrarTest` e `EmployeePointsEditTest`. A concorrência é testada com processos PHP reais (`tests/Support/register-justification.php`, `DatabaseTruncation`) que largam no mesmo instante e atrasam a gravação dentro da transação: registro, edições simultâneas da mesma versão, cancelamentos simultâneos e edição contra cancelamento. Sem os bloqueios, esses testes falham.
 
-## 13. Pendências
+Efeitos no controle de horas (F5):
+
+| Arquivo | Cobertura |
+|---|---|
+| `TimesheetJustificationsTest` | Funções puras, sem banco: abono integral, parcial (entrada primeiro), limites pela tolerância e pelo atraso, intervalo previsto excluído, várias justificativas sem ultrapassar o atraso, virada da meia-noite, "não abonar", banco de horas e marcação única sem abono; critérios de conferência (`justifiesAbsence`) e de sugestão (`suppressesAbsenceSuggestion`); textos de `note()`. |
+| `TimesheetMirrorJustificationsTest` | Espelho oficial (F5.1): abono, conferência de ausência, canceladas e outros funcionários ignorados, edição/mudança de data/cancelamento refletidos na leitura, falha na gravação deixando o espelho no estado anterior, espelho sem justificativas igual ao anterior, leitura sem gravação (competência fechada incluída) e número fixo de consultas. |
+| `TimesheetAllowancePresentationTest` | Regra alternativa e comparação (D8), tela de horas extras e impressão com os mesmos valores (D9), prévia das decisões do AFD sem justificativas e horas extras inalteradas. |
+| `SuggesterJustificationsTest` | Gerador de sugestões (F5.3): supressão, contadores sem sobreposição, `dedupe_key`, cauda não suprimida, conflito `absence_with_justification` informativo, ajustes confirmados/rejeitados intactos, competência fechada, consultas e tela. |
+| `SkippedJustifiedMigrationTest` | Migration reversível; execuções anteriores recebem 0. Em arquivo próprio porque o DDL do MySQL confirma a transação do teste. |
+
+Regressão: `TimesheetMirrorTest`, `TimesheetMirrorAlternativeTest`, `AlternativeComparisonTest`, `TimesheetAdjustmentSuggesterTest`, `TimesheetCompensationTest`, `AfdHistoricalDecisionsRecoverTest` e `BenefitSchemaTest` continuam valendo. Três ganharam somente os campos novos, sem mudar valores: `TimesheetMirrorAlternativeTest` (totais de atraso bruto e abonado), `TimesheetAdjustmentSuggesterTest` (`skipped_justified` e a leitura fixa das justificativas) e `BenefitSchemaTest` (coluna nova).
+
+## 14. Pendências
 
 - Matriz motivo × tratamento e exigência documental (RH).
-- Efeito no espelho (abono do atraso, dia fora de conferência) e unificação da leitura da jornada prevista com o `TimesheetMirror` (F5).
+- Supressão por justificativa nas compensações da cauda (exigiria contador próprio). Unificação da leitura da jornada prevista entre o validador e o `TimesheetMirror`.
 - Validação visual da edição e do cancelamento no navegador.
+- Validação visual, na tela de ajustes de benefícios, do contador "Ignoradas por justificativa" e do conflito "Ausência com justificativa abonada" (F5.3).

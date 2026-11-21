@@ -12,6 +12,7 @@ use App\Models\BenefitPeriod;
 use App\Models\BenefitSuggestionRun;
 use App\Models\Employee;
 use App\Models\Point;
+use App\Models\PointJustification;
 use Carbon\CarbonImmutable;
 use DomainException;
 use Illuminate\Support\Collection;
@@ -42,6 +43,14 @@ use Illuminate\Support\Facades\DB;
  * aplica as regras do ajuste, a deduplicação e a invalidação de competência calculada.
  * Conflitos não são persistidos.
  *
+ * Justificativas de ponto (F5.3): dia útil sem batida coberto por justificativa ativa de
+ * dia inteiro com abono integral ou parcial (TimesheetJustifications::
+ * suppressesAbsenceSuggestion) não gera ausência injustificada e é contado em
+ * `skipped_justified`, depois das verificações de `skipped_existing` e `skipped_covered`
+ * (um dia entra em um único contador). A cauda da competência anterior não é afetada.
+ * Sugestões já existentes nesses dias geram o conflito informativo
+ * absence_with_justification; nenhum ajuste é alterado.
+ *
  * Datas de `points` são comparadas pelos 10 primeiros caracteres: a importação AFD
  * grava "Y-m-d" e o lançamento manual (cast `date` do model legado) grava
  * "Y-m-d 00:00:00" no SQLite.
@@ -52,6 +61,7 @@ class TimesheetAdjustmentSuggester
         private BusinessCalendar $calendar,
         private BenefitEligibility $eligibility,
         private BenefitAdjustmentRegistrar $registrar,
+        private TimesheetJustifications $justifications,
     ) {}
 
     /**
@@ -187,7 +197,7 @@ class TimesheetAdjustmentSuggester
      * (F12/S3) e registra a execução. Origem e destino são bloqueados nesta ordem (a
      * mesma de BenefitPeriodWorkflow::reopen); tudo ocorre em uma única transação.
      *
-     * @return array{created: int, skipped_existing: int, skipped_covered: int, skipped_unobserved_days: int, compensation_created: int, compensation_skipped_existing: int, compensation_skipped_covered: int, compensation_skipped_unobserved_days: int, compensation_not_compensable: int, last_imported: string, horizon: string, processed_from: string, processed_to: string, tail_status: string, tail_from: ?string, tail_to: ?string}
+     * @return array{created: int, skipped_existing: int, skipped_covered: int, skipped_justified: int, skipped_unobserved_days: int, compensation_created: int, compensation_skipped_existing: int, compensation_skipped_covered: int, compensation_skipped_unobserved_days: int, compensation_not_compensable: int, last_imported: string, horizon: string, processed_from: string, processed_to: string, tail_status: string, tail_from: ?string, tail_to: ?string}
      *
      * @throws DomainException quando a geração está bloqueada ou uma sugestão viola as regras do registro
      */
@@ -231,6 +241,7 @@ class TimesheetAdjustmentSuggester
                 'created' => 0,
                 'skipped_existing' => 0,
                 'skipped_covered' => 0,
+                'skipped_justified' => 0,
                 'skipped_unobserved_days' => 0,
                 'compensation_created' => 0,
                 'compensation_skipped_existing' => 0,
@@ -270,6 +281,12 @@ class TimesheetAdjustmentSuggester
 
                     if (isset($coverage[$employee->id][$date])) {
                         $summary['skipped_covered']++;
+
+                        continue;
+                    }
+
+                    if ($reason === AdjustmentReason::UnjustifiedAbsence && isset($analysis['justified_absence'][$employee->id][$date])) {
+                        $summary['skipped_justified']++;
 
                         continue;
                     }
@@ -355,6 +372,11 @@ class TimesheetAdjustmentSuggester
      * - suggestion_beyond_coverage: sugestão do ponto após o ponto coberto atual, em data já processada por uma execução;
      * - suggestion_coverage_unknown: idem, sem execução registrada que tenha processado a data;
      * - absence_without_imported_punches: ausência do ponto em dia útil coberto que perdeu todas as batidas importadas.
+     *
+     * Conflito informativo de justificativa (F5.3), além dos anteriores:
+     * - absence_with_justification: ausência injustificada do ponto não rejeitada (inclusive
+     *   compensação) em dia com justificativa ativa de dia inteiro e abono integral ou
+     *   parcial. Deixa de aparecer quando a justificativa é cancelada.
      * Compensações (F12/S3) são avaliadas na data original do evento, fora da janela da
      * página, com o ponto considerado completo até o horizonte.
      *
@@ -505,6 +527,33 @@ class TimesheetAdjustmentSuggester
             }
         }
 
+        foreach ($activeTimesheetAdjustments as $adjustment) {
+            $employee = $tracked->get((int) $adjustment->employee_id);
+
+            if ($employee === null || $adjustment->reason !== AdjustmentReason::UnjustifiedAbsence) {
+                continue;
+            }
+
+            $isCompensation = $this->registrar->isCompensation($adjustment);
+            $start = $isCompensation ? $adjustment->starts_on : $adjustment->starts_on->max($period->windowStart());
+            $end = $isCompensation ? $adjustment->starts_on : $adjustment->ends_on->min($period->windowEnd());
+
+            for ($day = $start; $day->lessThanOrEqualTo($end); $day = $day->addDay()) {
+                $justification = $analysis['justified_absence'][$employee->id][$day->toDateString()] ?? null;
+
+                if ($justification !== null) {
+                    $conflicts[] = $this->justificationConflict(
+                        $adjustment,
+                        $employee,
+                        $day->toDateString(),
+                        $justification,
+                        $period,
+                        $isCompensation ? $periods->get($this->compensationOriginId($adjustment)) : null,
+                    );
+                }
+            }
+        }
+
         if ($tail['status'] === 'processable') {
             $findings = $this->tailEvents($tail, $analysis, $tracked->whereIn('id', $tailOriginIds), $tail['origin']);
 
@@ -622,6 +671,7 @@ class TimesheetAdjustmentSuggester
      *     punched: array<int, array<string, true>>,
      *     covered_absence: array<int, array<string, list<BenefitAdjustment>>>,
      *     covered_work: array<int, array<string, list<BenefitAdjustment>>>,
+     *     justified_absence: array<int, array<string, PointJustification>>,
      *     imported_dates: array<string, true>,
      *     unknown_pis: array<string, array<string, true>>,
      *     duplicated_pis: array<string, Collection<int, Employee>>
@@ -692,6 +742,7 @@ class TimesheetAdjustmentSuggester
         }
 
         [$coveredAbsence, $coveredWork] = $this->coverage($tracked->modelKeys(), $rangeStart, $windowEnd);
+        $justifiedAbsence = $this->justifiedAbsence($tracked->modelKeys(), $rangeStart, $windowEnd);
 
         return [
             'days' => $this->calendar->days($windowStart, $windowEnd),
@@ -701,6 +752,7 @@ class TimesheetAdjustmentSuggester
             'punched' => $punched,
             'covered_absence' => $coveredAbsence,
             'covered_work' => $coveredWork,
+            'justified_absence' => $justifiedAbsence,
             'imported_dates' => $importedDates,
             'unknown_pis' => $unknownPis,
             'duplicated_pis' => $duplicatedPis,
@@ -751,6 +803,56 @@ class TimesheetAdjustmentSuggester
         }
 
         return [$coveredAbsence, $coveredWork];
+    }
+
+    /**
+     * F5.3: dias cobertos por justificativa ativa de dia inteiro com abono integral ou
+     * parcial, por funcionário e data, carregados em uma consulta (com o motivo). A data
+     * seguinte de uma justificativa que atravessa a meia-noite não é coberta.
+     *
+     * @param  list<int>  $employeeIds
+     * @return array<int, array<string, PointJustification>>
+     */
+    private function justifiedAbsence(array $employeeIds, CarbonImmutable $from, CarbonImmutable $to): array
+    {
+        $justified = [];
+
+        foreach ($this->justifications->forEmployees($employeeIds, $from, $to) as $employeeId => $byDate) {
+            foreach ($byDate as $date => $justifications) {
+                $justification = $this->justifications->suppressesAbsenceSuggestion(CarbonImmutable::parse($date), $justifications);
+
+                if ($justification !== null) {
+                    $justified[$employeeId][$date] = $justification;
+                }
+            }
+        }
+
+        return $justified;
+    }
+
+    /**
+     * absence_with_justification (F5.3): somente informativo. O ajuste não é rejeitado,
+     * alterado nem excluído; a decisão é do RH.
+     *
+     * @return array{type: string, employee_id: ?int, date: ?string, message: string, adjustment_id: ?int, coverage: ?string, action: ?string}
+     */
+    private function justificationConflict(BenefitAdjustment $adjustment, Employee $employee, string $date, PointJustification $justification, BenefitPeriod $period, ?BenefitPeriod $compensationOrigin): array
+    {
+        $action = $period->status === BenefitPeriodStatus::Closed
+            ? $this->recommendedAction($adjustment, $period)
+            : 'Revise o ajuste #'.$adjustment->id.': a justificativa indica que a ausência foi abonada. Rejeite com nota ou mantenha o ajuste; nada é alterado automaticamente.';
+
+        return $this->conflict(
+            'absence_with_justification',
+            $employee->id,
+            $date,
+            $employee->name.' tem justificativa de ponto ativa para o dia inteiro '.CarbonImmutable::parse($date)->format('d/m/Y')
+                .' (motivo: '.$justification->reason->name.'; tratamento: '.mb_strtolower($justification->treatment->label())
+                .'; justificativa #'.$justification->id.'), mas existe ausência injustificada sugerida pelo ponto. Ajuste afetado: '
+                .$this->describeAdjustment($adjustment, $date, $period, $compensationOrigin).'.',
+            $adjustment->id,
+            action: $action,
+        );
     }
 
     /**

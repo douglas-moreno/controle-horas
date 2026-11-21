@@ -53,8 +53,12 @@
             <div class="text-2xl font-bold text-green-700">{{ $totalExtraHours ?? '00:00' }}</div>
         </div>
         <div class="bg-amber-50 p-4 rounded-lg border border-amber-200">
-            <div class="text-sm text-gray-600 mb-1">Atraso</div>
+            <div class="text-sm text-gray-600 mb-1">{{ $totalAllowedDelayMinutes > 0 ? 'Atraso líquido' : 'Atraso' }}</div>
             <div class="text-2xl font-bold text-amber-700">{{ $totalDelayHours }}</div>
+            @if ($totalAllowedDelayMinutes > 0)
+                <div class="text-xs text-gray-600 mt-1">Atraso bruto: {{ $totalDelayBeforeAllowanceHours }}</div>
+                <div class="text-xs text-gray-600">Abonado: {{ $totalAllowedDelayHours }}</div>
+            @endif
             @if ($reviewDays > 0)
                 <div class="text-xs text-amber-700 mt-1">{{ $reviewDays }} {{ $reviewDays === 1 ? 'dia' : 'dias' }} para conferência</div>
             @endif
@@ -110,13 +114,24 @@
                             <td class="text-lg text-center p-2">{{ $day['almoco_fim'] }}</td>
                             <td class="text-lg text-center p-2">{{ $day['saida'] }}</td>
                             <td class="text-lg text-center p-2 font-bold text-green-600">{{ $day['overtime'] }}</td>
-                            <td class="text-lg text-center p-2 font-bold text-amber-600">{{ $day['delay'] }}</td>
+                            <td class="text-lg text-center p-2 font-bold text-amber-600">
+                                @if (($day['allowed_delay_minutes'] ?? 0) > 0)
+                                    <div class="text-xs font-normal text-gray-600">Atraso bruto: {{ $day['delay_before_allowance'] }}</div>
+                                    <div class="text-xs font-normal text-gray-600">Abonado: {{ $day['allowed_delay'] }}</div>
+                                    <div title="Atraso líquido">Atraso líquido: {{ $day['delay'] }}</div>
+                                @else
+                                    {{ $day['delay'] }}
+                                @endif
+                            </td>
                             <td class="text-center p-2">
                                 @if ($day['status_label'])
                                     <x-ui-badge :label="$day['status_label']" :color="$day['needs_review'] ? 'amber' : 'gray'" />
                                 @endif
                                 @foreach ($day['hr_annotations'] ?? [] as $annotation)
                                     <x-ui-badge :label="$annotation" color="gray" title="Anotação do RH: só registro, o ponto continua contando nos cálculos" />
+                                @endforeach
+                                @foreach ($day['justification_notes'] ?? [] as $note)
+                                    <div class="text-xs text-gray-700 mt-1">{{ $note }}</div>
                                 @endforeach
                             </td>
                         </tr>

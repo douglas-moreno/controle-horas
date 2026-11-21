@@ -53,6 +53,17 @@ class EmployeeHorasExtras extends Component
 
     public string $totalDelayHours = '00:00';
 
+    /**
+     * Atraso antes dos abonos de justificativas e minutos abonados no período (F5.2).
+     */
+    public int $totalDelayBeforeAllowanceMinutes = 0;
+
+    public string $totalDelayBeforeAllowanceHours = '00:00';
+
+    public int $totalAllowedDelayMinutes = 0;
+
+    public string $totalAllowedDelayHours = '00:00';
+
     public int $reviewDays = 0;
 
     #[Url()]
@@ -154,6 +165,10 @@ class EmployeeHorasExtras extends Component
 
         $this->totalDelayMinutes = $totals['delay_minutes'];
         $this->totalDelayHours = $totals['delay'];
+        $this->totalDelayBeforeAllowanceMinutes = $totals['delay_before_allowance_minutes'];
+        $this->totalDelayBeforeAllowanceHours = $totals['delay_before_allowance'];
+        $this->totalAllowedDelayMinutes = $totals['allowed_delay_minutes'];
+        $this->totalAllowedDelayHours = $totals['allowed_delay'];
         $this->reviewDays = $totals['review_days'];
     }
 

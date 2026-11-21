@@ -464,6 +464,7 @@ describe('runs', function () {
                 'created' => 2,
                 'skipped_existing' => 0,
                 'skipped_covered' => 0,
+                'skipped_justified' => 0,
                 'skipped_unobserved_days' => 1,
                 'compensation_created' => 0,
                 'compensation_skipped_existing' => 0,
@@ -761,7 +762,8 @@ describe('queries', function () {
 
         expect(BenefitAdjustment::count())->toBe(0)
             ->and($reads->filter(fn (string $sql) => str_contains($sql, 'points'))->count())->toBe(2)
-            ->and($reads->count())->toBeLessThanOrEqual(8);
+            ->and($reads->filter(fn (string $sql) => str_contains($sql, 'point_justifications'))->count())->toBe(1)
+            ->and($reads->count())->toBeLessThanOrEqual(9);
     });
 
     test('the points of the window are read with one distinct query', function () {

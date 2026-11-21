@@ -155,6 +155,8 @@ test('the alternative totals are the sum of the alternative daily values', funct
         'overtime_minutes' => 308,
         'late_entry_minutes' => 6,
         'early_leave_minutes' => 270,
+        'delay_before_allowance_minutes' => 276,
+        'allowed_delay_minutes' => 0,
         'delay_minutes' => 276,
         'review_days' => 3,
         'overtime' => '05:08',

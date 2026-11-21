@@ -26,6 +26,8 @@
         td.time { width: 40px; }
         td.minutes { width: 46px; }
         td.occurrence { text-align: left; width: 150px; font-size: 10px; }
+        td.justification { text-align: left; font-size: 9px; }
+        .allowance { font-size: 8px; line-height: 1.1; }
         td.check { width: 16px; }
         td.signature { width: 70px; }
         tr.highlighted td { background: #f3f4f6; }
@@ -118,14 +120,19 @@
                             <td class="time">{{ $day['almoco_fim'] }}</td>
                             <td class="time">{{ $day['saida'] }}</td>
                             <td class="minutes">{{ $day['overtime_minutes'] > 0 ? $day['overtime'] : '' }}</td>
-                            <td class="minutes">{{ $day['delay_minutes'] ? $day['delay'] : '' }}</td>
+                            <td class="minutes">
+                                {{ $day['delay_minutes'] || ($day['allowed_delay_minutes'] ?? 0) > 0 ? $day['delay'] : '' }}
+                                @if (($day['allowed_delay_minutes'] ?? 0) > 0)
+                                    <div class="allowance">bruto {{ $day['delay_before_allowance'] }}<br>abon. {{ $day['allowed_delay'] }}</div>
+                                @endif
+                            </td>
                             <td class="occurrence">
                                 @if ($day['holiday'])
                                     Feriado: {{ $day['holiday'] }}@if ($day['status_label']) · @endif
                                 @endif
                                 {{ collect([$day['status_label'], ...($day['hr_annotations'] ?? [])])->filter()->implode(' · ') }}
                             </td>
-                            <td></td>
+                            <td class="justification">{{ implode(' · ', $day['justification_notes'] ?? []) }}</td>
                             <td class="check"></td>
                             <td class="check"></td>
                             <td class="signature"></td>
@@ -136,6 +143,9 @@
                         <td class="minutes">{{ $timesheet['totals']['overtime'] }}</td>
                         <td class="minutes">{{ $timesheet['totals']['delay'] }}</td>
                         <td class="occurrence">
+                            @if ($timesheet['totals']['allowed_delay_minutes'] > 0)
+                                Atraso bruto {{ $timesheet['totals']['delay_before_allowance'] }} · abonado {{ $timesheet['totals']['allowed_delay'] }} · líquido {{ $timesheet['totals']['delay'] }}<br>
+                            @endif
                             @if ($timesheet['totals']['review_days'] > 0)
                                 {{ $timesheet['totals']['review_days'] }} {{ $timesheet['totals']['review_days'] === 1 ? 'dia' : 'dias' }} para conferência
                             @endif
@@ -147,7 +157,8 @@
 
             <div class="legend">
                 Atraso = entrada após o horário previsto (tolerância de {{ $tolerance }} min) + saída antecipada, sem contar o intervalo.
-                Dias com ocorrência não têm atraso calculado. O atraso é informativo e não representa desconto.
+                Dias com ocorrência não têm atraso calculado. A coluna Atraso mostra o atraso líquido: atraso bruto menos os minutos abonados por justificativas
+                (detalhados em "Justificativa da irregularidade"). O atraso é informativo e não representa desconto.
             </div>
 
             <div class="footer">

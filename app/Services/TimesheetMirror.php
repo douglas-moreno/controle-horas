@@ -3,11 +3,13 @@
 namespace App\Services;
 
 use App\Enums\CalendarDayType;
+use App\Enums\JustificationTreatment;
 use App\Enums\TimesheetDayStatus;
 use App\Models\AfdPointDecision;
 use App\Models\Employee;
 use App\Models\Holiday;
 use App\Models\Point;
+use App\Models\PointJustification;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Support\Carbon;
@@ -45,7 +47,20 @@ use InvalidArgumentException;
  * `hr_annotations` o horário e o rótulo dos pontos anotados ("16:30 Duplicada (RH)"). É
  * só um marcador: o ponto continua contando em todos os cálculos.
  *
- * Somente lê `points`, `holidays` e `afd_point_decisions`; não grava nada.
+ * Justificativas do controle de ponto (F5.1, TimesheetJustifications): com as
+ * justificativas ativas recebidas (forEmployee() as carrega; build() as recebe por
+ * parâmetro), o atraso calculado é abonado conforme o tratamento e os horários:
+ * `delay_before_allowance_minutes` (bruto), `allowed_delay_minutes` (abonado) e
+ * `delay_minutes` (líquido = bruto − abonado, nunca negativo). `late_entry_minutes` e
+ * `early_leave_minutes` continuam brutos. Dia útil sem marcação coberto por justificativa
+ * de dia inteiro sai da conferência (`justified`), mantendo a situação "sem marcação".
+ * `justifications` lista as justificativas que atingem o dia e `justification_notes` traz
+ * o texto de cada uma ("Abonado — motivo, período: HH:MM"), o mesmo na tela e na
+ * impressão. A regra alternativa recebe o mesmo abono (D8). Sem justificativas, os
+ * valores são os mesmos de antes.
+ *
+ * Somente lê `points`, `holidays`, `afd_point_decisions` e `point_justifications`; não
+ * grava nada.
  */
 class TimesheetMirror
 {
@@ -53,6 +68,7 @@ class TimesheetMirror
         private BusinessCalendar $calendar,
         private OvertimeCalculator $overtime,
         private AlternativeTimesheetRule $alternativeRule,
+        private TimesheetJustifications $justifications,
     ) {}
 
     /**
@@ -68,7 +84,7 @@ class TimesheetMirror
             ->orderBy('time')
             ->get();
 
-        return $this->build($points, $start, $end);
+        return $this->build($points, $start, $end, $this->justifications->forEmployee($employee, $start, $end));
     }
 
     /**
@@ -76,9 +92,10 @@ class TimesheetMirror
      * inclusive os dias sem marcação. Período invertido resulta em espelho vazio.
      *
      * @param  Collection<int, Point>  $points
+     * @param  array<string, list<PointJustification>>  $justificationsByDate  justificativas ativas do funcionário por data (TimesheetJustifications)
      * @return array{days: list<array<string, mixed>>, totals: array<string, mixed>}
      */
-    public function build(Collection $points, CarbonInterface $start, CarbonInterface $end): array
+    public function build(Collection $points, CarbonInterface $start, CarbonInterface $end, array $justificationsByDate = []): array
     {
         $pointsByDate = $points->groupBy(fn (Point $point) => Carbon::parse($point->date)->format('Y-m-d'));
         $labels = AfdPointDecision::activeLabels($points->pluck('id')->filter()->map(fn ($id) => (int) $id)->values()->all());
@@ -87,7 +104,7 @@ class TimesheetMirror
 
         if ($start->toDateString() <= $end->toDateString()) {
             foreach ($this->calendar->days($start, $end) as $date => $dayType) {
-                $days[] = $this->day(CarbonImmutable::parse($date), $dayType, $pointsByDate->get($date, collect()), $labels);
+                $days[] = $this->day(CarbonImmutable::parse($date), $dayType, $pointsByDate->get($date, collect()), $labels, $justificationsByDate[$date] ?? []);
             }
         }
 
@@ -138,9 +155,10 @@ class TimesheetMirror
     /**
      * @param  Collection<int, Point>  $points
      * @param  array<int, string>  $labels  Rótulo da anotação ativa do RH por id de ponto.
+     * @param  list<PointJustification>  $justifications  justificativas ativas que atingem a data
      * @return array<string, mixed>
      */
-    private function day(CarbonImmutable $date, CalendarDayType $dayType, Collection $points, array $labels = []): array
+    private function day(CarbonImmutable $date, CalendarDayType $dayType, Collection $points, array $labels = [], array $justifications = []): array
     {
         $slots = $this->distribute($points);
         $punchCount = $points->count();
@@ -156,9 +174,24 @@ class TimesheetMirror
             $earlyLeave = $this->scheduledMinutesBetween($schedule, $slots['saida'], $schedule['exit']);
         }
 
-        $delay = $lateEntry === null ? null : $lateEntry + $earlyLeave;
+        $delayBeforeAllowance = $lateEntry === null ? null : $lateEntry + $earlyLeave;
+        $allowance = $delayBeforeAllowance === null || $justifications === []
+            ? null
+            : $this->justifications->allowance($date, $schedule, $slots['entrada'], $slots['saida'], $lateEntry, $earlyLeave, $justifications);
+        $allowedDelay = $delayBeforeAllowance === null ? null : ($allowance['total'] ?? 0);
+        $delay = $delayBeforeAllowance === null ? null : $delayBeforeAllowance - $allowedDelay;
+
+        $absenceJustification = $status === TimesheetDayStatus::NoPunches ? $this->justifications->justifiesAbsence($date, $justifications) : null;
+        $statusLabel = $absenceJustification === null
+            ? $status->label()
+            : 'Justificado — '.$absenceJustification->reason->name.($absenceJustification->treatment === JustificationTreatment::NoAllowance ? ' (não abonado)' : '');
+
         $overtime = $this->overtime->minutes($date, $slots);
         $alternative = $this->alternativeRule->forDay($date, $dayType, $this->times($points)->all(), $overtime);
+        $presented = array_map(
+            fn (PointJustification $justification) => $this->justifications->present($justification, $allowance['by_justification'][(int) $justification->getKey()] ?? 0),
+            $justifications,
+        );
 
         $day = [
             'date' => $date->format('Y-m-d'),
@@ -174,18 +207,25 @@ class TimesheetMirror
                 ->values()->all(),
             ...$slots,
             'status' => $status,
-            'status_label' => $status->label(),
-            'needs_review' => $status->needsReview(),
+            'status_label' => $statusLabel,
+            'needs_review' => $absenceJustification === null && $status->needsReview(),
+            'justified' => $absenceJustification !== null,
             'overtime_minutes' => $overtime,
             'overtime' => OvertimeCalculator::format($overtime),
             'late_entry_minutes' => $lateEntry,
             'early_leave_minutes' => $earlyLeave,
+            'delay_before_allowance_minutes' => $delayBeforeAllowance,
+            'allowed_delay_minutes' => $allowedDelay,
             'delay_minutes' => $delay,
+            'delay_before_allowance' => self::format($delayBeforeAllowance),
+            'allowed_delay' => self::format($allowedDelay),
             'delay' => self::format($delay),
+            'justifications' => $presented,
+            'justification_notes' => array_map(fn (array $item) => $this->justifications->note($item), $presented),
         ];
 
         if ($alternative !== null) {
-            $day['alternative'] = $this->alternativeDay($alternative);
+            $day['alternative'] = $this->alternativeDay($alternative, $date, $schedule, $justifications);
         }
 
         return $day;
@@ -195,14 +235,41 @@ class TimesheetMirror
      * Dados alternativos do dia, separados dos campos oficiais. Extra e atraso null
      * indicam dia não calculado pela alternativa (conferência, sem marcação ou sem jornada).
      *
+     * As justificativas recebem o mesmo tratamento do oficial (D8), pela mesma função do
+     * TimesheetJustifications: abono sobre o atraso alternativo (entrada prevista → 1ª
+     * marcação considerada e última → saída prevista) e dia útil sem marcação justificado
+     * por dia inteiro fora da conferência. Assim a comparação não acusa divergência só
+     * por causa do abono.
+     *
+     * @param  array{entry: string, break_start: string, break_end: string, exit: string}|null  $schedule
+     * @param  list<PointJustification>  $justifications
      * @return array<string, mixed>
      */
-    private function alternativeDay(AlternativeDayResult $result): array
+    private function alternativeDay(AlternativeDayResult $result, CarbonImmutable $date, ?array $schedule, array $justifications = []): array
     {
+        $delayBeforeAllowance = $result->delayMinutes;
+        $allowedDelay = $delayBeforeAllowance === null ? null : 0;
+
+        if ($delayBeforeAllowance !== null && $schedule !== null && $justifications !== [] && $result->consideredTimes !== []) {
+            $allowedDelay = $this->justifications->allowance(
+                $date,
+                $schedule,
+                $result->consideredTimes[0],
+                $result->consideredTimes[array_key_last($result->consideredTimes)],
+                (int) $result->lateEntryMinutes,
+                (int) $result->earlyLeaveMinutes,
+                $justifications,
+            )['total'];
+        }
+
+        $delay = $delayBeforeAllowance === null ? null : $delayBeforeAllowance - $allowedDelay;
+        $justified = $result->status === TimesheetDayStatus::NoPunches && $this->justifications->justifiesAbsence($date, $justifications) !== null;
+
         return [
             'status' => $result->status,
             'status_label' => $result->status->label(),
-            'needs_review' => $result->needsReview(),
+            'needs_review' => ! $justified && $result->needsReview(),
+            'justified' => $justified,
             'review_reason' => $result->reviewReason,
             'review_reason_label' => $result->reviewReason?->label(),
             'considered_times' => $result->consideredTimes,
@@ -213,8 +280,10 @@ class TimesheetMirror
             'after_exit_minutes' => $result->afterExitMinutes,
             'late_entry_minutes' => $result->lateEntryMinutes,
             'early_leave_minutes' => $result->earlyLeaveMinutes,
-            'delay_minutes' => $result->delayMinutes,
-            'delay' => self::format($result->delayMinutes),
+            'delay_before_allowance_minutes' => $delayBeforeAllowance,
+            'allowed_delay_minutes' => $allowedDelay,
+            'delay_minutes' => $delay,
+            'delay' => self::format($delay),
         ];
     }
 
@@ -234,6 +303,8 @@ class TimesheetMirror
             'overtime_minutes' => $sum('overtime_minutes'),
             'late_entry_minutes' => $sum('late_entry_minutes'),
             'early_leave_minutes' => $sum('early_leave_minutes'),
+            'delay_before_allowance_minutes' => $sum('delay_before_allowance_minutes'),
+            'allowed_delay_minutes' => $sum('allowed_delay_minutes'),
             'delay_minutes' => $sum('delay_minutes'),
             'review_days' => $alternatives->where('needs_review', true)->count(),
         ];
@@ -355,13 +426,18 @@ class TimesheetMirror
             'holiday_overtime_minutes' => $overtimeBy(CalendarDayType::Holiday),
             'late_entry_minutes' => $days->sum(fn (array $day) => $day['late_entry_minutes'] ?? 0),
             'early_leave_minutes' => $days->sum(fn (array $day) => $day['early_leave_minutes'] ?? 0),
+            'delay_before_allowance_minutes' => $days->sum(fn (array $day) => $day['delay_before_allowance_minutes'] ?? 0),
+            'allowed_delay_minutes' => $days->sum(fn (array $day) => $day['allowed_delay_minutes'] ?? 0),
             'delay_minutes' => $days->sum(fn (array $day) => $day['delay_minutes'] ?? 0),
             'review_days' => $days->where('needs_review', true)->count(),
+            'justified_days' => $days->where('justified', true)->count(),
         ];
 
         return [
             ...$totals,
             'overtime' => OvertimeCalculator::format($totals['overtime_minutes']),
+            'delay_before_allowance' => OvertimeCalculator::format($totals['delay_before_allowance_minutes']),
+            'allowed_delay' => OvertimeCalculator::format($totals['allowed_delay_minutes']),
             'delay' => OvertimeCalculator::format($totals['delay_minutes']),
         ];
     }

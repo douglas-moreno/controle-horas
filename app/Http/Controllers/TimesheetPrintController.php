@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\TimesheetPrintRequest;
 use App\Models\Employee;
+use App\Services\TimesheetJustifications;
 use App\Services\TimesheetMirror;
 use Illuminate\Contracts\View\View;
 use Illuminate\Support\Carbon;
@@ -11,9 +12,10 @@ use Illuminate\Support\Carbon;
 class TimesheetPrintController extends Controller
 {
     /**
-     * Gera a página de impressão do espelho de ponto dos funcionários ativos selecionados.
+     * Gera a página de impressão do espelho de ponto dos funcionários ativos selecionados,
+     * com as justificativas ativas carregadas em uma consulta (mesmos valores da tela).
      */
-    public function __invoke(TimesheetPrintRequest $request, TimesheetMirror $mirror): View
+    public function __invoke(TimesheetPrintRequest $request, TimesheetMirror $mirror, TimesheetJustifications $justifications): View
     {
         $start = Carbon::createFromFormat('Y-m-d', $request->validated('start'))->startOfDay();
         $end = Carbon::createFromFormat('Y-m-d', $request->validated('end'))->startOfDay();
@@ -28,9 +30,11 @@ class TimesheetPrintController extends Controller
             ->orderBy('name')
             ->get();
 
+        $justificationsByEmployee = $justifications->forEmployees($employees->modelKeys(), $start, $end);
+
         $timesheets = $employees->map(fn (Employee $employee) => [
             'employee' => $employee,
-            ...$mirror->build($employee->points, $start, $end),
+            ...$mirror->build($employee->points, $start, $end, $justificationsByEmployee[$employee->id] ?? []),
         ]);
 
         return view('timesheet-print', [

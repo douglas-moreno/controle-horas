@@ -71,6 +71,7 @@
                     Sugestões geradas: {{ $generationSummary['created'] }} ·
                     Já existentes: {{ $generationSummary['skipped_existing'] }} ·
                     Ignoradas por cobertura: {{ $generationSummary['skipped_covered'] }} ·
+                    Ignoradas por justificativa: {{ $generationSummary['skipped_justified'] }} ·
                     Dias úteis sem batidas: {{ $generationSummary['skipped_unobserved_days'] }}
                     @if ($generationSummary['tail_status'] === 'processable')
                         <div>Compensações da competência anterior ({{ \Carbon\CarbonImmutable::parse($generationSummary['tail_from'])->format('d/m/Y') }} a {{ \Carbon\CarbonImmutable::parse($generationSummary['tail_to'])->format('d/m/Y') }}): {{ $generationSummary['compensation_created'] }} criada(s) · {{ $generationSummary['compensation_skipped_existing'] }} já existente(s) · {{ $generationSummary['compensation_skipped_covered'] }} coberta(s) · {{ $generationSummary['compensation_skipped_unobserved_days'] }} dia(s) útil(eis) sem batidas · {{ $generationSummary['compensation_not_compensable'] }} sem participação no destino</div>
@@ -84,7 +85,7 @@
                     intervalo {{ $lastSuggestionRun->processed_from->format('d/m/Y') }} a {{ $lastSuggestionRun->processed_to->format('d/m/Y') }}
                     (ponto completo até {{ $lastSuggestionRun->horizon_on->format('d/m/Y') }}) ·
                     {{ $lastSuggestionRun->created }} criada(s), {{ $lastSuggestionRun->skipped_existing }} já existente(s),
-                    {{ $lastSuggestionRun->skipped_covered }} coberta(s), {{ $lastSuggestionRun->skipped_unobserved_days }} dia(s) útil(eis) sem batidas
+                    {{ $lastSuggestionRun->skipped_covered }} coberta(s), {{ $lastSuggestionRun->skipped_justified }} justificada(s), {{ $lastSuggestionRun->skipped_unobserved_days }} dia(s) útil(eis) sem batidas
                     @if ($lastSuggestionRun->tail_from !== null && $lastSuggestionRun->tail_to !== null)
                         · cauda {{ $lastSuggestionRun->tail_from->format('d/m/Y') }} a {{ $lastSuggestionRun->tail_to->format('d/m/Y') }}: {{ $lastSuggestionRun->compensation_created }} compensação(ões) criada(s)
                     @endif
@@ -96,7 +97,7 @@
     <div class="rounded border border-gray-200 p-4">
         <h2 class="text-lg font-semibold">Conflitos para revisão</h2>
         @forelse ($conflicts as $conflict)
-            <div class="mt-2 text-sm {{ in_array($conflict['type'], ['employee_rescinded', 'unknown_pis'], true) ? 'text-blue-800' : 'text-amber-800' }}" wire:key="conflict-{{ $loop->index }}">
+            <div class="mt-2 text-sm {{ in_array($conflict['type'], ['employee_rescinded', 'unknown_pis', 'absence_with_justification'], true) ? 'text-blue-800' : 'text-amber-800' }}" wire:key="conflict-{{ $loop->index }}">
                 <div>
                     <span class="font-semibold">{{ match ($conflict['type']) {
                         'absence_with_punch' => 'Ausência com batida',
@@ -105,6 +106,7 @@
                         'suggestion_beyond_coverage' => 'Sugestão fora do ponto coberto',
                         'suggestion_coverage_unknown' => 'Sugestão com cobertura anterior desconhecida',
                         'absence_without_imported_punches' => 'Ausência em dia que perdeu as batidas importadas',
+                        'absence_with_justification' => 'Ausência com justificativa abonada',
                         'employee_rescinded' => 'Funcionário com rescisão',
                         'unknown_pis' => 'PIS desconhecido',
                         'duplicated_pis' => 'PIS duplicado',

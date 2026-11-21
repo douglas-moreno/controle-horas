@@ -16,7 +16,9 @@ use LogicException;
  * Os campos `tail_*` e `compensation_*` (F12/S3) registram a compensação da cauda da
  * competência anterior fechada: a origem, a execução da origem que define a cobertura
  * registrada (`tail_origin_covered_until` = seu `processed_to`) e o intervalo da cauda.
- * `created` é o total criado pela execução, compensações incluídas.
+ * `created` é o total criado pela execução, compensações incluídas. `skipped_justified`
+ * (F5.3) conta os dias sem sugestão de ausência por justificativa de ponto abonada,
+ * separado de `skipped_covered` (dias cobertos por ajustes).
  */
 class BenefitSuggestionRun extends Model
 {
@@ -36,6 +38,7 @@ class BenefitSuggestionRun extends Model
         'created',
         'skipped_existing',
         'skipped_covered',
+        'skipped_justified',
         'skipped_unobserved_days',
         'tail_origin_covered_until',
         'tail_from',
@@ -71,6 +74,7 @@ class BenefitSuggestionRun extends Model
             'created' => 'integer',
             'skipped_existing' => 'integer',
             'skipped_covered' => 'integer',
+            'skipped_justified' => 'integer',
             'skipped_unobserved_days' => 'integer',
             'tail_origin_covered_until' => DateOnly::class,
             'tail_from' => DateOnly::class,

@@ -80,7 +80,7 @@ class BenefitPeriodAdjustments extends Component
     /**
      * Resumo da última geração de sugestões do ponto nesta tela.
      *
-     * @var array{created: int, skipped_existing: int, skipped_covered: int}|null
+     * @var array{created: int, skipped_existing: int, skipped_covered: int, skipped_justified: int}|null
      */
     public ?array $generationSummary = null;
 
@@ -260,6 +260,7 @@ class BenefitPeriodAdjustments extends Component
                 .'. Sugestões geradas: '.$this->generationSummary['created']
                 .'. Já existentes: '.$this->generationSummary['skipped_existing']
                 .'. Ignoradas por cobertura: '.$this->generationSummary['skipped_covered']
+                .'. Ignoradas por justificativa: '.$this->generationSummary['skipped_justified']
                 .'. Dias úteis sem batidas: '.$this->generationSummary['skipped_unobserved_days'].'.'
                 .($this->generationSummary['tail_status'] === 'processable' ? ' Compensações da competência anterior criadas: '.$this->generationSummary['compensation_created'].'.' : '')
         );
