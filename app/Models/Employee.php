@@ -65,6 +65,23 @@ class Employee extends Model
     }
 
     /**
+     * @return HasMany<TimesheetSnapshot, $this>
+     */
+    public function timesheetSnapshots(): HasMany
+    {
+        return $this->hasMany(TimesheetSnapshot::class);
+    }
+
+    /**
+     * Indica se o funcionário possui snapshots do espelho de ponto, que são permanentes e
+     * impedem a exclusão física.
+     */
+    public function hasTimesheetSnapshots(): bool
+    {
+        return $this->timesheetSnapshots()->exists();
+    }
+
+    /**
      * Indica se o funcionário possui justificativas do controle de ponto (ativas ou
      * canceladas), que impedem a exclusão física.
      */

@@ -4,12 +4,14 @@ namespace App\Livewire\Benefits;
 
 use App\Enums\BenefitPeriodStatus;
 use App\Enums\BenefitType;
+use App\Enums\DatabaseFailure;
 use App\Models\BenefitPeriod;
 use App\Services\BenefitPeriodCalculator;
 use App\Services\BenefitPeriodWorkflow;
 use App\Services\Money;
 use DomainException;
 use Illuminate\Contracts\View\View;
+use Illuminate\Database\QueryException;
 use Livewire\Component;
 use WireUi\Traits\WireUiActions;
 
@@ -65,6 +67,11 @@ class BenefitPeriodCalculation extends Component
         );
     }
 
+    /**
+     * Fecha pela BenefitPeriodWorkflow. Falha de banco previsível (espera de bloqueio,
+     * deadlock ou integridade por gravação concorrente) desfaz a transação inteira e vira
+     * impedimento na tela, registrada no log; qualquer outra falha segue como erro.
+     */
     public function close(BenefitPeriodWorkflow $workflow): void
     {
         $this->closeBlockers = $workflow->closeBlockers($this->benefitPeriod);
@@ -74,6 +81,8 @@ class BenefitPeriodCalculation extends Component
                 $workflow->close($this->benefitPeriod);
             } catch (DomainException $exception) {
                 $this->closeBlockers = [$exception->getMessage()];
+            } catch (QueryException $exception) {
+                $this->closeBlockers = [$this->databaseFailureMessage($exception)];
             }
         }
 
@@ -92,6 +101,21 @@ class BenefitPeriodCalculation extends Component
             $title = 'Competência Fechada',
             $description = 'A competência '.$this->benefitPeriod->competence->format('m/Y').' foi recalculada e fechada.'
         );
+    }
+
+    /**
+     * @throws QueryException quando a falha não é uma das previsíveis
+     */
+    private function databaseFailureMessage(QueryException $exception): string
+    {
+        $failure = DatabaseFailure::fromException($exception) ?? throw $exception;
+
+        report($exception);
+
+        return match ($failure) {
+            DatabaseFailure::Concurrency => 'Outra operação estava usando os dados desta competência (espera de bloqueio esgotada ou conflito). Nada foi gravado; tente fechar novamente.',
+            DatabaseFailure::Integrity => 'Outra operação gravou ao mesmo tempo um registro relacionado e o fechamento foi desfeito. Nada foi gravado; confira a competência e tente novamente.',
+        };
     }
 
     public function openReopenModal(): void

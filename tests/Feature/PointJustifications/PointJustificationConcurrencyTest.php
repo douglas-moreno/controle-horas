@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Symfony\Component\Process\Process;
+use Tests\TestCase;
 
 /*
  * Concorrência real: processos PHP separados disputam o mesmo funcionário. Os dados
@@ -25,7 +26,8 @@ use Symfony\Component\Process\Process;
 uses(DatabaseTruncation::class);
 
 beforeEach(function () {
-    expect(DB::connection()->getDatabaseName())->toBe('testing');
+    $this->database = DB::connection()->getDatabaseName();
+    expect(TestCase::isTestDatabase($this->database))->toBeTrue("Banco de teste não autorizado: {$this->database}");
 
     $this->seed(PointJustificationReasonSeeder::class);
 
@@ -51,7 +53,7 @@ beforeEach(function () {
                     ...($input['_operation'] ?? []),
                 ])],
                 base_path(),
-                ['APP_ENV' => 'testing', 'DB_DATABASE' => 'testing'],
+                ['APP_ENV' => 'testing', 'DB_DATABASE' => $this->database],
                 timeout: 60,
             );
             $process->start();
@@ -74,6 +76,8 @@ beforeEach(function () {
  * seguida no mesmo processo não truncam as tabelas.
  */
 afterEach(function () {
+    expect(TestCase::isTestDatabase(DB::connection()->getDatabaseName()))->toBeTrue();
+
     Schema::withoutForeignKeyConstraints(fn () => collect(Schema::getTableListing(schemaQualified: false))
         ->reject(fn (string $table) => $table === 'migrations')
         ->each(fn (string $table) => DB::table($table)->truncate()));

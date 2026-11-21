@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Enums\BenefitPeriodStatus;
 use App\Enums\JustificationHistoryAction;
 use App\Enums\PunchKind;
+use App\Enums\TimesheetSnapshotSource;
 use App\Models\BenefitPeriod;
 use App\Models\Employee;
 use App\Models\Point;
@@ -18,6 +19,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -26,8 +28,10 @@ use Illuminate\Validation\ValidationException;
  * Fluxo de `register()`, tudo em uma transação (qualquer falha desfaz justificativa,
  * batida manual e histórico):
  * 1. Gate `manage-point-justifications` (antes de qualquer leitura).
- * 2. Bloqueio do funcionário (`lockForUpdate`): serializa os registros do mesmo
- *    funcionário, inclusive a inclusão de batida pelo ManualPointRegistrar.
+ * 2. Bloqueio compartilhado das competências da data e da seguinte (`lockCompetences`, F6.2d)
+ *    e só então do funcionário (`lockForUpdate`): serializa os registros do mesmo
+ *    funcionário, inclusive a inclusão de batida pelo ManualPointRegistrar, na mesma ordem
+ *    do fechamento (competência → funcionário).
  * 3. Idempotência: `request_uuid` já gravado devolve a justificativa existente quando o
  *    conteúdo é o mesmo e recusa quando é diferente. Corrida entre funcionários distintos
  *    com o mesmo identificador cai no UNIQUE do banco e é tratada da mesma forma.
@@ -40,8 +44,8 @@ use Illuminate\Validation\ValidationException;
  *    (PunchSequence) e criação da batida pelo ManualPointRegistrar.
  * 8. Justificativa (com `manual_point_id`) e histórico append-only.
  *
- * `update()` e `cancel()` (F4), também transacionais, bloqueiam o funcionário e a
- * justificativa (nessa ordem, como o registro) e conferem a `version` recebida pelo
+ * `update()` e `cancel()` (F4), também transacionais, bloqueiam a justificativa, as
+ * competências atingidas e o funcionário (nessa ordem, F6.2d) e conferem a `version` recebida pelo
  * formulário: divergência é recusada sem sobrescrever a alteração concorrente.
  * - Edição: revalidação completa, sobreposição (sem contar a própria justificativa),
  *   competências anterior e nova, sequência cronológica e, havendo marcação vinculada,
@@ -51,6 +55,21 @@ use Illuminate\Validation\ValidationException;
  *   retrato no histórico, salvo se protegida pelo RH, caso em que nada é cancelado. A
  *   justificativa é marcada como cancelada antes da remoção: a batida vinculada a uma
  *   justificativa ativa não pode ser excluída (Point::deleting).
+ *
+ * Snapshots do espelho (F6.2b, TimesheetSnapshotRecorder), na mesma transação: quando a
+ * operação atinge dia de competência fechada — a data da justificativa e, com término no
+ * dia seguinte, a data seguinte; na edição, as datas anteriores e as novas — o dia é
+ * capturado antes da alteração e de novo depois do histórico, e os dois são gravados
+ * (`before_change`, `after_change`) com o mesmo `operation_uuid`, ligados ao registro
+ * principal do histórico e à competência. Competência aberta não gera snapshot. A
+ * permissão de competência fechada continua exigida só pela competência da data da
+ * justificativa (regra anterior); a data seguinte em outra competência fechada ganha
+ * snapshot sem nova exigência.
+ *
+ * Ponto de partida tardio (F6.2c): dia de competência fechada sem `closure_baseline` nem
+ * `late_baseline` (competência fechada antes da implantação, ou funcionário fora do
+ * fechamento) recebe `late_baseline` com o estado capturado antes da alteração, gravado
+ * antes do `before_change`, uma única vez por funcionário e dia.
  *
  * Nunca altera batidas importadas nem dados de benefícios.
  */
@@ -90,6 +109,7 @@ class PointJustificationService
         private PointJustificationValidator $validator,
         private ManualPointRegistrar $registrar,
         private PunchSequence $sequence,
+        private TimesheetSnapshotRecorder $snapshots,
     ) {}
 
     /**
@@ -162,7 +182,7 @@ class PointJustificationService
      */
     private function updateLocked(PointJustification $justification, array $input, int $expectedVersion, User $user): array
     {
-        [$employee, $current] = $this->lockForChange($justification, $expectedVersion, 'Esta justificativa está cancelada e não pode ser alterada.');
+        [$employee, $current] = $this->lockForChange($justification, $expectedVersion, 'Esta justificativa está cancelada e não pode ser alterada.', [(string) ($input['occurrence_date'] ?? '')]);
 
         $oldDate = $current->occurrence_date->toDateString();
         $date = (string) ($input['occurrence_date'] ?? $oldDate);
@@ -187,6 +207,10 @@ class PointJustificationService
         $before = $current->getAttributes();
         $pointBefore = $this->pointSnapshot($current->manual_point_id);
         $linkedPoint = $current->manual_point_id === null ? null : Point::query()->find($current->manual_point_id);
+        $snapshotsBefore = $this->captureClosedDays($employee, [
+            ...$this->affectedDates($oldDate, (bool) $current->ends_next_day),
+            ...$this->affectedDates($attributes['occurrence_date'], (bool) $attributes['ends_next_day']),
+        ]);
 
         if ($linkedPoint !== null && ! $reason->creates_manual_point) {
             throw ValidationException::withMessages([
@@ -222,7 +246,7 @@ class PointJustificationService
             ->implode(', ');
         $history = $this->historyContext($newCompetence, $oldClosed !== null || $newClosed !== null, $user);
 
-        PointJustificationHistory::query()->create([
+        $mainHistory = PointJustificationHistory::query()->create([
             ...$history,
             'point_justification_id' => $current->getKey(),
             'action' => JustificationHistoryAction::Updated,
@@ -266,6 +290,8 @@ class PointJustificationService
             ]);
         }
 
+        $this->recordClosedDays($employee, $snapshotsBefore, $mainHistory, $user);
+
         return ['justification' => $current->load(['reason', 'manualPoint']), 'changed' => true];
     }
 
@@ -308,7 +334,7 @@ class PointJustificationService
 
     private function cancelLocked(PointJustification $justification, string $reason, int $expectedVersion, User $user): PointJustification
     {
-        [, $current] = $this->lockForChange($justification, $expectedVersion, 'Esta justificativa já foi cancelada.');
+        [$employee, $current] = $this->lockForChange($justification, $expectedVersion, 'Esta justificativa já foi cancelada.');
 
         $competence = $this->competenceOf($current->occurrence_date->toDateString());
         $closed = $this->lockedClosedPeriod($competence, $user);
@@ -326,6 +352,7 @@ class PointJustificationService
         $before = $current->getAttributes();
         $pointSnapshot = $this->pointSnapshot($point?->getKey());
         $pointId = $point?->getKey();
+        $snapshotsBefore = $this->captureClosedDays($employee, $this->affectedDates($current->occurrence_date->toDateString(), (bool) $current->ends_next_day));
 
         $current->forceFill([
             'canceled_at' => now(),
@@ -342,7 +369,7 @@ class PointJustificationService
 
         $history = $this->historyContext($competence, $closed !== null, $user);
 
-        PointJustificationHistory::query()->create([
+        $mainHistory = PointJustificationHistory::query()->create([
             ...$history,
             'point_justification_id' => $current->getKey(),
             'action' => JustificationHistoryAction::Canceled,
@@ -364,6 +391,8 @@ class PointJustificationService
             ]);
         }
 
+        $this->recordClosedDays($employee, $snapshotsBefore, $mainHistory, $user);
+
         return $current->load(['reason', 'manualPoint']);
     }
 
@@ -373,6 +402,7 @@ class PointJustificationService
      */
     private function registerLocked(Employee $employee, string $date, array $input, User $user): array
     {
+        $this->lockCompetences([$date]);
         $locked = Employee::query()->lockForUpdate()->find($employee->getKey());
 
         if ($locked === null) {
@@ -394,6 +424,7 @@ class PointJustificationService
         $occurrenceDate = CarbonImmutable::parse($attributes['occurrence_date']);
         $competence = $occurrenceDate->startOfMonth()->addMonthNoOverflow();
         $closedPeriod = $this->lockedClosedPeriod($competence, $user);
+        $snapshotsBefore = $this->captureClosedDays($locked, $this->affectedDates($attributes['occurrence_date'], (bool) $attributes['ends_next_day']));
 
         $point = null;
         $classification = null;
@@ -419,7 +450,7 @@ class PointJustificationService
 
         $pointSnapshot = $point === null ? null : (array) Point::query()->toBase()->find($point->getKey());
 
-        PointJustificationHistory::query()->create([
+        $mainHistory = PointJustificationHistory::query()->create([
             ...$history,
             'point_justification_id' => $justification->getKey(),
             'action' => JustificationHistoryAction::Created,
@@ -446,6 +477,8 @@ class PointJustificationService
                 'manual_point_id' => $point->getKey(),
             ]);
         }
+
+        $this->recordClosedDays($locked, $snapshotsBefore, $mainHistory, $user);
 
         return ['justification' => $justification->load(['reason', 'manualPoint']), 'created' => true];
     }
@@ -660,6 +693,109 @@ class PointJustificationService
         return $classification === null ? null : [...$classification, 'kind' => $classification['kind']->value];
     }
 
+    /**
+     * Dias que a justificativa atinge no espelho: a data e, com término no dia seguinte, a
+     * data seguinte.
+     *
+     * @return list<string>
+     */
+    private function affectedDates(string $date, bool $endsNextDay): array
+    {
+        $date = CarbonImmutable::parse($date);
+
+        return $endsNextDay ? [$date->toDateString(), $date->addDay()->toDateString()] : [$date->toDateString()];
+    }
+
+    /**
+     * Captura, antes da alteração, os dias de competência fechada (competência relida com
+     * bloqueio compartilhado). Sem dia fechado, nada é capturado.
+     *
+     * @param  list<string>  $dates
+     * @return array{periods: array<string, BenefitPeriod>, captured: array<string, array<string, mixed>>}
+     */
+    private function captureClosedDays(Employee $employee, array $dates): array
+    {
+        $dates = array_values(array_unique($dates));
+        $competences = collect($dates)->mapWithKeys(fn (string $date) => [$date => $this->competenceOf($date)->toDateString()]);
+
+        $periods = BenefitPeriod::query()
+            ->whereIn('competence', $competences->unique()->values()->all())
+            ->where('status', BenefitPeriodStatus::Closed)
+            ->sharedLock()
+            ->get()
+            ->keyBy(fn (BenefitPeriod $period) => $period->competence->toDateString());
+
+        $closed = $competences->filter(fn (string $competence) => $periods->has($competence))
+            ->map(fn (string $competence) => $periods[$competence])
+            ->all();
+
+        return [
+            'periods' => $closed,
+            'captured' => $closed === [] ? [] : $this->snapshots->capture($employee, array_keys($closed)),
+        ];
+    }
+
+    /**
+     * Grava os dias capturados antes da alteração e os mesmos dias depois dela, com o
+     * mesmo identificador de operação, ligados ao histórico e à competência de cada dia.
+     *
+     * @param  array{periods: array<string, BenefitPeriod>, captured: array<string, array<string, mixed>>}  $before
+     */
+    private function recordClosedDays(Employee $employee, array $before, PointJustificationHistory $history, User $user): void
+    {
+        if ($before['captured'] === []) {
+            return;
+        }
+
+        $after = $this->snapshots->capture($employee, array_keys($before['captured']));
+        $operation = (string) Str::uuid();
+
+        foreach (collect($before['periods'])->groupBy(fn (BenefitPeriod $period) => $period->getKey(), preserveKeys: true) as $periodId => $dates) {
+            $context = ['operation_uuid' => $operation, 'point_justification_history_id' => $history->getKey(), 'benefit_period_id' => (int) $periodId];
+            $days = $dates->keys()->all();
+
+            $captured = array_intersect_key($before['captured'], array_flip($days));
+
+            $this->snapshots->persist($employee, $captured, TimesheetSnapshotSource::LateBaseline, $user, [
+                ...$context,
+                'reason' => 'Ponto de partida tardio: competência fechada sem ponto de partida para este dia; retrata o dia no momento desta operação, não o fechamento original.',
+            ]);
+            $this->snapshots->persist($employee, $captured, TimesheetSnapshotSource::BeforeChange, $user, $context);
+            $this->snapshots->persist($employee, array_intersect_key($after, array_flip($days)), TimesheetSnapshotSource::AfterChange, $user, $context);
+        }
+    }
+
+    /**
+     * Bloqueio compartilhado, em ordem crescente, das competências que a operação pode
+     * atingir (cada data e a seguinte, pelo término no dia seguinte), antes do bloqueio do
+     * funcionário e de qualquer leitura comum da transação.
+     *
+     * Ordem: competência → funcionário, a mesma do fechamento e do cálculo, que bloqueiam a
+     * competência e depois, ao gravar linhas com chave estrangeira para o funcionário
+     * (apuração e snapshots), recebem o bloqueio compartilhado do funcionário. Na ordem
+     * inversa (anterior à F6.2d) havia deadlock. Como nenhuma leitura comum acontece antes
+     * da espera, a visão da transação (REPEATABLE READ) já enxerga um fechamento concorrente
+     * concluído. Datas inválidas são ignoradas aqui e recusadas pela validação. A leitura
+     * traz a linha inteira: só o id seria lido do índice de competência, sem bloquear a linha
+     * (chave primária) que o fechamento bloqueia.
+     *
+     * @param  list<string>  $dates
+     */
+    private function lockCompetences(array $dates): void
+    {
+        $competences = collect($dates)
+            ->filter(fn (string $date) => preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) === 1 && checkdate((int) substr($date, 5, 2), (int) substr($date, 8, 2), (int) substr($date, 0, 4)))
+            ->flatMap(fn (string $date) => [$this->competenceOf($date), $this->competenceOf(CarbonImmutable::parse($date)->addDay()->toDateString())])
+            ->map(fn (CarbonImmutable $competence) => $competence->toDateString())
+            ->unique()->sort()->values();
+
+        if ($competences->isEmpty()) {
+            return;
+        }
+
+        BenefitPeriod::query()->whereIn('competence', $competences->all())->orderBy('competence')->sharedLock()->get();
+    }
+
     private function competenceOf(string $date): CarbonImmutable
     {
         return CarbonImmutable::parse($date)->startOfMonth()->addMonthNoOverflow();
@@ -670,12 +806,18 @@ class PointJustificationService
      *
      * @return array{0: Employee, 1: PointJustification}
      */
-    private function lockForChange(PointJustification $justification, int $expectedVersion, string $canceledMessage): array
+    private function lockForChange(PointJustification $justification, int $expectedVersion, string $canceledMessage, array $newDates = []): array
     {
-        $employee = Employee::query()->lockForUpdate()->find($justification->employee_id);
         $current = PointJustification::query()->lockForUpdate()->find($justification->getKey());
 
-        if ($employee === null || $current === null) {
+        if ($current === null) {
+            throw new DomainException('Justificativa não encontrada.');
+        }
+
+        $this->lockCompetences([$current->occurrence_date->toDateString(), ...$newDates]);
+        $employee = Employee::query()->lockForUpdate()->find($current->employee_id);
+
+        if ($employee === null) {
             throw new DomainException('Justificativa não encontrada.');
         }
 

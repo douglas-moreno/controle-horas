@@ -33,6 +33,8 @@
         tr.highlighted td { background: #f3f4f6; }
         tr.totals td { font-weight: bold; }
         .legend { margin-top: 3px; font-size: 9px; }
+        .snapshot-notices { margin-top: 4px; padding: 3px 6px; border: 1px solid #000; font-size: 9px; }
+        .snapshot-notices ul { margin: 2px 0 0 14px; padding: 0; }
         .footer { display: flex; margin-top: 6px; border: 1px solid #000; }
         .footer div { flex: 1; padding: 4px 6px; height: 54px; border-right: 1px solid #000; position: relative; font-size: 10px; }
         .footer div:last-child { border-right: none; }
@@ -160,6 +162,18 @@
                 Dias com ocorrência não têm atraso calculado. A coluna Atraso mostra o atraso líquido: atraso bruto menos os minutos abonados por justificativas
                 (detalhados em "Justificativa da irregularidade"). O atraso é informativo e não representa desconto.
             </div>
+
+            @if (! empty($timesheet['snapshot_notices']))
+                <div class="snapshot-notices">
+                    <strong>Atenção — espelho atual diverge do registro histórico da competência fechada.</strong>
+                    Este espelho mostra o cálculo atual; o registro histórico não foi alterado e pode ser consultado na tela do dia.
+                    <ul>
+                        @foreach ($timesheet['snapshot_notices'] as $notice)
+                            <li>{{ $notice['date'] }}: {{ $notice['message'] }}</li>
+                        @endforeach
+                    </ul>
+                </div>
+            @endif
 
             <div class="footer">
                 <div>

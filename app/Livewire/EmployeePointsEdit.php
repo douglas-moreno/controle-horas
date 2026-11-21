@@ -2,6 +2,7 @@
 
 namespace App\Livewire;
 
+use App\Enums\JustificationHistoryAction;
 use App\Enums\JustificationTimeMode;
 use App\Enums\JustificationTreatment;
 use App\Enums\PunchKind;
@@ -10,10 +11,15 @@ use App\Models\AfdPointDecision;
 use App\Models\Employee;
 use App\Models\Point;
 use App\Models\PointJustification;
+use App\Models\PointJustificationHistory;
 use App\Models\PointJustificationReason;
+use App\Models\TimesheetSnapshot;
 use App\Services\ManualPointRegistrar;
+use App\Services\PointJustificationHistoryPresenter;
 use App\Services\PointJustificationService;
 use App\Services\PointJustificationValidator;
+use App\Services\TimesheetSnapshotHistory;
+use App\Services\TimesheetSnapshotRecorder;
 use DomainException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Gate;
@@ -74,6 +80,22 @@ class EmployeePointsEdit extends Component
     public ?int $cancelingVersion = null;
 
     public string $cancellationReason = '';
+
+    public bool $showHistoryModal = false;
+
+    /**
+     * Justificativa cujo histórico está aberto (somente leitura, F6.1).
+     */
+    #[Locked]
+    public ?int $historyJustificationId = null;
+
+    public bool $showSnapshotsModal = false;
+
+    /**
+     * Versão do espelho aberta em detalhe (somente leitura, F6.2d).
+     */
+    #[Locked]
+    public ?int $snapshotId = null;
 
     public function addPoint()
     {
@@ -282,6 +304,67 @@ class EmployeePointsEdit extends Component
             $title = 'Justificativa Cancelada',
             $canceled->reason->name.($justification->manual_point_id !== null ? ' — marcação manual vinculada removida.' : '.')
         );
+    }
+
+    /**
+     * Abre o histórico (somente leitura) de uma justificativa do funcionário da tela,
+     * ativa ou cancelada, em qualquer data: a justificativa movida também é consultada a
+     * partir da data antiga. Nada é gravado.
+     */
+    public function showJustificationHistory(int $justificationId): void
+    {
+        $this->authorize('manage-point-justifications');
+
+        $exists = PointJustification::query()->where('employee_id', $this->employee->id)->whereKey($justificationId)->exists();
+
+        if (! $exists) {
+            $this->notification()->error($title = 'Operação Não Permitida', 'A justificativa não pertence a este funcionário.');
+
+            return;
+        }
+
+        $this->historyJustificationId = $justificationId;
+        $this->showHistoryModal = true;
+    }
+
+    public function closeJustificationHistory(): void
+    {
+        $this->showHistoryModal = false;
+        $this->historyJustificationId = null;
+    }
+
+    /**
+     * Abre as versões históricas do espelho do funcionário neste dia (somente leitura).
+     */
+    public function showSnapshotVersions(): void
+    {
+        $this->authorize('manage-point-justifications');
+
+        $this->snapshotId = null;
+        $this->showSnapshotsModal = true;
+    }
+
+    /**
+     * Detalhe de uma versão, restrito ao funcionário e ao dia da tela.
+     */
+    public function showSnapshot(int $snapshotId): void
+    {
+        $this->authorize('manage-point-justifications');
+
+        if ($this->screenSnapshot($snapshotId) === null) {
+            $this->notification()->error($title = 'Operação Não Permitida', 'A versão do espelho não pertence a este funcionário e dia.');
+
+            return;
+        }
+
+        $this->snapshotId = $snapshotId;
+        $this->showSnapshotsModal = true;
+    }
+
+    public function closeSnapshotVersions(): void
+    {
+        $this->showSnapshotsModal = false;
+        $this->snapshotId = null;
     }
 
     /**
@@ -506,11 +589,157 @@ class EmployeePointsEdit extends Component
             'showsAllowedMinutes' => ($this->justification['treatment'] ?? null) === JustificationTreatment::PartialAllowance->value,
             'closedPeriod' => app(PointJustificationValidator::class)->closedPeriodFor(Carbon::parse($this->date)->toImmutable()),
             'isEditingJustification' => $this->editingJustificationId !== null,
+            'movedJustifications' => $this->movedJustifications(),
+            'justificationHistory' => $this->justificationHistory(),
+            'snapshotVersions' => $this->snapshotVersions(),
+            'snapshotDetail' => $this->snapshotDetail(),
             'cancelingJustification' => $this->cancelingJustificationId === null ? null : PointJustification::query()
                 ->with(['reason', 'manualPoint'])
                 ->where('employee_id', $this->employee->id)
                 ->find($this->cancelingJustificationId),
         ];
+    }
+
+    private function screenSnapshot(int $snapshotId): ?TimesheetSnapshot
+    {
+        return TimesheetSnapshot::query()
+            ->where('employee_id', $this->employee->id)
+            ->where('date', Carbon::parse($this->date)->toDateString())
+            ->find($snapshotId);
+    }
+
+    /**
+     * Versões do dia com a referência usada no aviso de divergência.
+     *
+     * @return array{versions: list<array<string, mixed>>, reference_state: string, reference_stale: bool, competence: string, competence_status: ?string}|null
+     */
+    private function snapshotVersions(): ?array
+    {
+        if (! $this->showSnapshotsModal) {
+            return null;
+        }
+
+        $history = app(TimesheetSnapshotHistory::class);
+        $reference = $history->reference($this->employee, $this->date);
+        $referenceId = $reference['snapshot']?->getKey();
+
+        return [
+            'versions' => $history->versions($this->employee, $this->date)
+                ->map(fn (TimesheetSnapshot $snapshot) => [
+                    ...TimesheetSnapshotHistory::describe($snapshot),
+                    'is_reference' => $snapshot->getKey() === $referenceId,
+                    'print_url' => route('reports.timesheet.snapshot-print', $snapshot),
+                ])->all(),
+            'reference_state' => $reference['state'],
+            'reference_stale' => $reference['stale'],
+            'competence' => Carbon::parse($this->date)->startOfMonth()->addMonthNoOverflow()->format('m/Y'),
+            'competence_status' => $reference['period']?->status->label(),
+        ];
+    }
+
+    /**
+     * Conteúdo gravado da versão aberta (sem recálculo) e, se íntegra, a comparação com o
+     * espelho atual. Nada é gravado.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function snapshotDetail(): ?array
+    {
+        if (! $this->showSnapshotsModal || $this->snapshotId === null) {
+            return null;
+        }
+
+        $snapshot = $this->screenSnapshot($this->snapshotId);
+
+        if ($snapshot === null) {
+            return null;
+        }
+
+        $described = TimesheetSnapshotHistory::describe($snapshot);
+        $result = is_array($snapshot->result) ? $snapshot->result : [];
+        $calculation = $snapshot->inputs['calculation'] ?? [];
+        $comparison = $described['integrity_problems'] === [] ? app(TimesheetSnapshotRecorder::class)->divergence($snapshot) : null;
+        $schedule = $calculation['schedule'] ?? null;
+
+        return [
+            ...$described,
+            'stored' => [
+                'Entrada' => $result['entrada'] ?? '',
+                'Saída para intervalo' => $result['almoco_inicio'] ?? '',
+                'Retorno do intervalo' => $result['almoco_fim'] ?? '',
+                'Saída' => $result['saida'] ?? '',
+                'Hora extra' => $result['overtime'] ?? '',
+                'Atraso bruto' => $result['delay_before_allowance'] ?? '',
+                'Abonado' => $result['allowed_delay'] ?? '',
+                'Atraso' => $result['delay'] ?? '',
+                'Ocorrência' => collect([filled($result['holiday'] ?? null) ? 'Feriado: '.$result['holiday'] : null, $result['status_label'] ?? null, ...($result['hr_annotations'] ?? [])])->filter()->implode(' · '),
+                'Justificativas' => implode(' · ', $result['justification_notes'] ?? []),
+            ],
+            'inputs' => [
+                'PIS' => $calculation['employee_pis'] ?? '',
+                'Tipo do dia' => $calculation['day_type'] ?? '',
+                'Jornada' => is_array($schedule) ? ($schedule['entry'] ?? '').' · '.($schedule['break_start'] ?? '').'–'.($schedule['break_end'] ?? '').' · '.($schedule['exit'] ?? '') : 'sem jornada',
+                'Tolerância' => isset($calculation['entry_tolerance_minutes']) ? $calculation['entry_tolerance_minutes'].' min' : '',
+                'Marcações' => collect($calculation['points'] ?? [])->map(fn (array $point) => substr((string) ($point['time'] ?? ''), 0, 5).' ('.($point['type'] ?? '').')'.(($point['hr_annotation'] ?? null) ? ' '.$point['hr_annotation'] : ''))->implode(', '),
+                'Justificativas' => collect($calculation['justifications'] ?? [])->map(fn (array $item) => ($item['reason_name'] ?? '').' '.trim(($item['start_time'] ?? '').'–'.($item['end_time'] ?? ''), '–').' ('.($item['treatment'] ?? '').')')->implode(', '),
+                'Regra alternativa' => ($calculation['alternative_rule']['enabled'] ?? false) ? 'ligada' : 'desligada',
+            ],
+            'comparison' => $comparison === null ? null : [
+                'result_changed' => $comparison['result_changed'],
+                'inputs_changed' => $comparison['inputs_changed'],
+                'rules_changed' => $comparison['rules_changed'],
+                'fields' => TimesheetSnapshotHistory::fieldLabels($comparison['changed_result_fields']),
+            ],
+            'print_url' => route('reports.timesheet.snapshot-print', $snapshot),
+        ];
+    }
+
+    /**
+     * Histórico aberto, filtrado pelo funcionário da tela.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function justificationHistory(): ?array
+    {
+        if (! $this->showHistoryModal || $this->historyJustificationId === null) {
+            return null;
+        }
+
+        $justification = PointJustification::query()
+            ->where('employee_id', $this->employee->id)
+            ->find($this->historyJustificationId);
+
+        return $justification === null ? null : app(PointJustificationHistoryPresenter::class)->present($justification);
+    }
+
+    /**
+     * Justificativas do funcionário que estavam nesta data e foram movidas pela edição para
+     * outra data (aviso na data antiga). O motivo é o do retrato gravado na edição.
+     *
+     * @return list<array{id: int, reason: string, new_date: string, new_date_url: string, canceled: bool}>
+     */
+    private function movedJustifications(): array
+    {
+        $date = Carbon::parse($this->date)->toDateString();
+
+        return PointJustificationHistory::query()
+            ->with('justification')
+            ->where('action', JustificationHistoryAction::Updated)
+            ->where('old_values->justification->occurrence_date', $date)
+            ->whereHas('justification', fn ($query) => $query->where('employee_id', $this->employee->id)->whereDate('occurrence_date', '!=', $date))
+            ->orderByDesc('id')
+            ->get()
+            ->unique('point_justification_id')
+            ->sortBy('point_justification_id')
+            ->map(fn (PointJustificationHistory $history) => [
+                'id' => (int) $history->point_justification_id,
+                'reason' => (string) ($history->new_values['reason']['name'] ?? 'Justificativa #'.$history->point_justification_id),
+                'new_date' => $history->justification->occurrence_date->format('d/m/Y'),
+                'new_date_url' => route('points-edit', ['employee' => $this->employee->id, 'date' => $history->justification->occurrence_date->toDateString()]),
+                'canceled' => $history->justification->isCanceled(),
+            ])
+            ->values()
+            ->all();
     }
 
     public function mount($employee, $date)
@@ -547,6 +776,7 @@ class EmployeePointsEdit extends Component
                 ->pluck('related_manual_point_id')
                 ->map(fn ($id) => (int) $id)
                 ->all(),
+            'snapshotNotice' => app(TimesheetSnapshotHistory::class)->notice($this->employee, $this->date, withAuthor: Gate::allows('manage-point-justifications')),
             ...$this->justificationViewData(),
         ]);
     }

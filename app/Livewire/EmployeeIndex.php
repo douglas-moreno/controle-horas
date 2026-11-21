@@ -3,10 +3,12 @@
 namespace App\Livewire;
 
 use App\Enums\AfdRejectionReason;
+use App\Enums\DatabaseFailure;
 use App\Models\AfdImport;
 use App\Models\Employee;
 use App\Services\AfdImporter;
 use DomainException;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 use Livewire\Component;
@@ -59,7 +61,31 @@ class EmployeeIndex extends Component
             return;
         }
 
-        $employee->delete();
+        if ($employee->hasTimesheetSnapshots()) {
+            $this->notification()->error(
+                $title = 'Exclusão Não Permitida',
+                $description = 'O funcionário possui registros históricos do espelho de ponto (fechamento de competência ou alterações em competência fechada), que são preservados permanentemente. Informe a data de rescisão em vez de excluí-lo.'
+            );
+
+            return;
+        }
+
+        try {
+            $employee->delete();
+        } catch (QueryException $exception) {
+            $failure = DatabaseFailure::fromException($exception) ?? throw $exception;
+            report($exception);
+
+            $this->notification()->error(
+                $title = 'Exclusão Não Realizada',
+                $description = match ($failure) {
+                    DatabaseFailure::Integrity => 'O funcionário passou a ter registros vinculados durante a exclusão (por exemplo, no fechamento de uma competência). Nada foi excluído. Informe a data de rescisão em vez de excluí-lo.',
+                    DatabaseFailure::Concurrency => 'O funcionário estava em uso por outra operação (por exemplo, o fechamento de uma competência). Nada foi excluído; tente novamente.',
+                }
+            );
+
+            return;
+        }
 
         $this->notification()->success(
             $title = 'Funcionário Excluído',

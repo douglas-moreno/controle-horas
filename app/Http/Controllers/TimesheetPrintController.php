@@ -6,6 +6,7 @@ use App\Http\Requests\TimesheetPrintRequest;
 use App\Models\Employee;
 use App\Services\TimesheetJustifications;
 use App\Services\TimesheetMirror;
+use App\Services\TimesheetSnapshotHistory;
 use Illuminate\Contracts\View\View;
 use Illuminate\Support\Carbon;
 
@@ -14,8 +15,12 @@ class TimesheetPrintController extends Controller
     /**
      * Gera a página de impressão do espelho de ponto dos funcionários ativos selecionados,
      * com as justificativas ativas carregadas em uma consulta (mesmos valores da tela).
+     *
+     * `snapshot_notices` (F6.2d): dias de competência fechada em que o espelho atual difere
+     * do registro histórico de referência (ou cuja referência falhou na integridade). Só
+     * leitura; o espelho impresso continua sendo o cálculo atual.
      */
-    public function __invoke(TimesheetPrintRequest $request, TimesheetMirror $mirror, TimesheetJustifications $justifications): View
+    public function __invoke(TimesheetPrintRequest $request, TimesheetMirror $mirror, TimesheetJustifications $justifications, TimesheetSnapshotHistory $history): View
     {
         $start = Carbon::createFromFormat('Y-m-d', $request->validated('start'))->startOfDay();
         $end = Carbon::createFromFormat('Y-m-d', $request->validated('end'))->startOfDay();
@@ -35,6 +40,7 @@ class TimesheetPrintController extends Controller
         $timesheets = $employees->map(fn (Employee $employee) => [
             'employee' => $employee,
             ...$mirror->build($employee->points, $start, $end, $justificationsByEmployee[$employee->id] ?? []),
+            'snapshot_notices' => $history->printNotices($employee, $start, $end),
         ]);
 
         return view('timesheet-print', [
@@ -45,7 +51,7 @@ class TimesheetPrintController extends Controller
                 'name' => filled(config('timesheet.company.name')) ? (string) config('timesheet.company.name') : null,
                 'cnpj' => filled(config('timesheet.company.cnpj')) ? (string) config('timesheet.company.cnpj') : null,
             ],
-            'schedule' => $this->scheduleSummary(config('timesheet.schedule', [])),
+            'schedule' => self::scheduleSummary(config('timesheet.schedule', [])),
             'tolerance' => (int) config('timesheet.entry_tolerance_minutes', 0),
         ]);
     }
@@ -56,7 +62,7 @@ class TimesheetPrintController extends Controller
      * @param  array<int, array{entry: string, break_start: string, break_end: string, exit: string}>  $schedule
      * @return list<array{days: string, times: array{entry: string, break_start: string, break_end: string, exit: string}}>
      */
-    private function scheduleSummary(array $schedule): array
+    public static function scheduleSummary(array $schedule): array
     {
         $names = [1 => 'Seg', 2 => 'Ter', 3 => 'Qua', 4 => 'Qui', 5 => 'Sex', 6 => 'Sáb', 7 => 'Dom'];
         ksort($schedule);

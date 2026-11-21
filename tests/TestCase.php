@@ -15,6 +15,18 @@ abstract class TestCase extends BaseTestCase
      */
     public const TEST_DATABASE = 'testing';
 
+    /**
+     * Nomes de banco aceitos pelos testes de concorrência real e pelos processos filhos:
+     * `testing` ou o banco isolado do modo paralelo, `testing_test_N` (N inteiro positivo,
+     * ParallelTesting::token()). Nome inteiro, sem sufixo nem quebra de linha (`\z`).
+     */
+    public const TEST_DATABASE_PATTERN = '/^testing(?:_test_[1-9][0-9]*)?\z/';
+
+    public static function isTestDatabase(string $database): bool
+    {
+        return preg_match(self::TEST_DATABASE_PATTERN, $database) === 1;
+    }
+
     public function createApplication(): Application
     {
         $app = parent::createApplication();

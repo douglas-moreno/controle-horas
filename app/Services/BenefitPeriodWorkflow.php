@@ -6,10 +6,12 @@ use App\Enums\AdjustmentStatus;
 use App\Enums\BenefitPeriodStatus;
 use App\Models\BenefitPeriod;
 use App\Models\BenefitPeriodStatusChange;
+use App\Models\TimesheetSnapshot;
 use Carbon\CarbonImmutable;
 use DomainException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 /**
  * Ciclo de vida da competência: Open → Calculated → Closed, com reabertura para Open.
@@ -19,10 +21,19 @@ use Illuminate\Support\Facades\DB;
  * e cascata sobre a prévia de M+1), invalidação da prévia (Calculated → Open) e
  * exclusão. Toda transição passa por changeStatus() e fica no histórico.
  * Violações de regra lançam DomainException com mensagem para o usuário.
+ *
+ * Fechamento e espelho de ponto (F6.2c): o fechamento grava, na mesma transação, o ponto
+ * de partida do espelho (`closure_baseline`, TimesheetSnapshotRecorder) de todos os dias da
+ * janela de cada funcionário abrangido; qualquer falha desfaz o fechamento. A reabertura
+ * não apaga nem altera snapshots; cada novo fechamento grava novas versões, com outro
+ * `operation_uuid` e o número do fechamento no motivo. Os cálculos de benefícios não mudam.
  */
 class BenefitPeriodWorkflow
 {
-    public function __construct(private BenefitPeriodCalculator $calculator) {}
+    public function __construct(
+        private BenefitPeriodCalculator $calculator,
+        private TimesheetSnapshotRecorder $snapshots,
+    ) {}
 
     /**
      * Cria a próxima competência: o mês seguinte à última existente ou, quando não há
@@ -169,13 +180,21 @@ class BenefitPeriodWorkflow
 
             $this->changeStatus($period, BenefitPeriodStatus::Closed, 'Competência fechada.');
 
+            $closure = $period->statusChanges()->where('to_status', BenefitPeriodStatus::Closed)->count();
+            $this->snapshots->recordClosureBaseline(
+                $period,
+                auth()->user(),
+                (string) Str::uuid(),
+                'Fechamento nº '.$closure.' da competência '.$period->competence->format('m/Y').'.',
+            );
+
             return $result;
         });
     }
 
     /**
      * Reabre uma competência fechada: volta para Open com motivo obrigatório e descarta
-     * o snapshot. Se M+1 estiver calculada, a prévia de M+1 é descartada antes (ela pode
+     * o snapshot de benefícios (os snapshots do espelho de ponto são preservados). Se M+1 estiver calculada, a prévia de M+1 é descartada antes (ela pode
      * ter aplicado o saldo de M). Com M+1 fechada, a reabertura é recusada.
      *
      * @throws DomainException
@@ -272,6 +291,10 @@ class BenefitPeriodWorkflow
 
         if ($period->adjustments()->exists()) {
             return 'A competência possui ajustes lançados.';
+        }
+
+        if (TimesheetSnapshot::query()->where('benefit_period_id', $period->getKey())->exists()) {
+            return 'A competência possui snapshots do espelho de ponto (fechamento anterior ou alterações em competência fechada), que são preservados permanentemente.';
         }
 
         return null;

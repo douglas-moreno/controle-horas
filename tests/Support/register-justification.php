@@ -8,7 +8,8 @@
  * artificial dentro da transação, logo antes de gravar a justificativa) e, opcionais,
  * operation (register | update | cancel), justification_id, version e reason (cancelamento).
  *
- * Recusa rodar fora do banco isolado `testing`. Imprime uma linha JSON com o resultado:
+ * Recusa rodar fora do banco isolado `testing` ou `testing_test_N` (modo paralelo), recebido do
+ * processo pai em `DB_DATABASE`; a conferência da configuração vem antes de qualquer consulta. Imprime uma linha JSON com o resultado:
  * created | replayed | updated | unchanged | canceled | validation (com errors) | error (com message).
  */
 
@@ -19,14 +20,19 @@ use App\Services\PointJustificationService;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
+use Tests\TestCase;
 
 require __DIR__.'/../../vendor/autoload.php';
 
 $app = require __DIR__.'/../../bootstrap/app.php';
 $app->make(Kernel::class)->bootstrap();
 
-if (DB::connection()->getDriverName() !== 'mysql' || DB::selectOne('select database() as name')->name !== 'testing') {
-    fwrite(STDERR, "Banco diferente de testing: abortado.\n");
+$connection = (string) config('database.default');
+$database = (string) config("database.connections.{$connection}.database");
+
+if (! app()->environment('testing') || config("database.connections.{$connection}.driver") !== 'mysql' || ! TestCase::isTestDatabase($database)
+    || DB::selectOne('select database() as name')->name !== $database) {
+    fwrite(STDERR, "Banco diferente de testing ou testing_test_N: abortado.\n");
     exit(2);
 }
 
