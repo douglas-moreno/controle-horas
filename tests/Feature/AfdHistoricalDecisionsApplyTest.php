@@ -206,7 +206,7 @@ test('the operator and the expected target database are required', function (arr
         ->and(($this->tables)())->toBe($before);
 })->with([
     'no operator' => [['operator' => ' '], 'Informe o responsável pela operação'],
-    'another server uuid' => [['expected' => ['hostname' => 'x', 'server_uuid' => 'e81bb1f7-bcd2-11f1-acb3-4a6823fe9a73', 'database' => 'laravel']], 'Banco de destino diferente do esperado'],
+    'another server uuid' => [['expected' => ['hostname' => 'x', 'server_uuid' => '00000000-0000-0000-0000-000000000000', 'database' => 'laravel']], 'Banco de destino diferente do esperado'],
 ]);
 
 test('a failure in the middle of the batch rolls everything back', function () {

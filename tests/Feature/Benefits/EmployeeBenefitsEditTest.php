@@ -9,7 +9,6 @@ use App\Models\TransportFarePrice;
 use App\Models\TransportRoute;
 use App\Models\User;
 use Carbon\CarbonImmutable;
-use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Features\SupportTesting\Testable;
 use Livewire\Livewire;
@@ -188,9 +187,13 @@ describe('eligibility', function () {
     test('another employee validity cannot be ended from this screen', function () {
         $foreign = EmployeeBenefit::factory()->ofType(BenefitType::Vt)->between('2026-09-01')->create();
 
-        expect(fn () => benefitsScreen($this->employee)->call('openEndBenefitModal', $foreign->id))
-            ->toThrow(ModelNotFoundException::class)
-            ->and($foreign->fresh()->ends_on)->toBeNull();
+        benefitsScreen($this->employee)
+            ->call('openEndBenefitModal', $foreign->id)
+            ->assertNotFound()
+            ->assertSet('showEndBenefitModal', false)
+            ->assertSet('endingBenefitId', null);
+
+        expect($foreign->fresh()->ends_on)->toBeNull();
     });
 });
 

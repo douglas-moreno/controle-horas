@@ -347,12 +347,12 @@ describe('commands', function () {
     })->with([
         'no operator' => [[], 'Informe o responsável pela importação'],
         'another host' => [['--operator' => 'ensaio', '--expect-host' => 'outro-host'], 'Banco de destino diferente do esperado (hostname)'],
-        'another server uuid' => [['--operator' => 'ensaio', '--expect-server-uuid' => 'e81bb1f7-bcd2-11f1-acb3-4a6823fe9a73'], 'Banco de destino diferente do esperado (server_uuid)'],
+        'another server uuid' => [['--operator' => 'ensaio', '--expect-server-uuid' => '00000000-0000-0000-0000-000000000000'], 'Banco de destino diferente do esperado (server_uuid)'],
         'no database' => [['--operator' => 'ensaio', '--expect-database' => ''], 'Banco de destino diferente do esperado (database)'],
     ]);
 
     test('afd:correction withhold refuses another target database', function () {
-        $this->artisan('afd:correction', ['action' => 'withhold', '--manifest' => $this->manifestPath, '--afd' => $this->scenario->path, '--apply' => true, '--operator' => 'ensaio', ...$this->identity, '--expect-server-uuid' => 'e81bb1f7-bcd2-11f1-acb3-4a6823fe9a73'])
+        $this->artisan('afd:correction', ['action' => 'withhold', '--manifest' => $this->manifestPath, '--afd' => $this->scenario->path, '--apply' => true, '--operator' => 'ensaio', ...$this->identity, '--expect-server-uuid' => '00000000-0000-0000-0000-000000000000'])
             ->expectsOutputToContain('Banco de destino diferente do esperado (server_uuid)')
             ->assertFailed();
 
