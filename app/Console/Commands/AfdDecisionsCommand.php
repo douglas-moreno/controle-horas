@@ -32,6 +32,10 @@ use LogicException;
  *   manifesto e, em cada linha, o `expected_consequence_sha256` da simulação aprovada.
  *   Código de saída 0 em sucesso; 1 em recusa.
  *
+ * Em produção, `approve` e `apply` só gravam com `--production` e com a aplicação em
+ * manutenção (AfdHistoricalCorrection::assertTarget); `convert` e `preview` não gravam e
+ * não exigem nenhum dos dois.
+ *
  * Os arquivos gerados nunca sobrescrevem um existente e ficam legíveis só pelo dono.
  */
 #[Signature('afd:decisions
@@ -49,7 +53,8 @@ use LogicException;
     {--operator= : Responsável pela operação (obrigatório em apply)}
     {--expect-host= : @@hostname esperado do banco (approve, apply)}
     {--expect-server-uuid= : @@server_uuid (MySQL) ou @@server_uid (MariaDB) esperado do banco (approve, apply)}
-    {--expect-database= : Nome esperado do banco (approve, apply)}')]
+    {--expect-database= : Nome esperado do banco (approve, apply)}
+    {--production : Autoriza gravar no ambiente de produção (approve, apply; exige a aplicação em manutenção)}')]
 #[Description('Decisões do RH sobre pendências históricas do AFD: conversão da matriz, simulação, aprovação e gravação')]
 class AfdDecisionsCommand extends Command
 {
@@ -65,6 +70,7 @@ class AfdDecisionsCommand extends Command
                 'approve' => $this->approve($decisions, $matrix, $manifest),
                 'apply' => $decisions->apply($manifest, $afd, [
                     'operator' => (string) $this->option('operator'),
+                    'production' => (bool) $this->option('production'),
                     'expected' => $this->expected(),
                 ]),
                 default => throw new DomainException('Ação desconhecida: use convert, preview, approve ou apply.'),
@@ -142,7 +148,7 @@ class AfdDecisionsCommand extends Command
         $approver = $this->authenticatedApprover();
         $approved = $matrix->approve($manifest, (string) $this->option('preview'), $approver);
         $contents = $this->json($approved);
-        $approval = $decisions->recordApproval($approved, $contents, $approver, $this->expected());
+        $approval = $decisions->recordApproval($approved, $contents, $approver, $this->expected(), (bool) $this->option('production'));
         $sha = $matrix->writeNew($output, $contents);
 
         return ['status' => 'approved', 'output' => $output, 'manifest_sha256' => $sha, 'approval_id' => $approval->id, 'rows' => count($approved['rows']), 'approved_from' => $approved['approved_from']];

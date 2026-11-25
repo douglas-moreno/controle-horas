@@ -31,7 +31,7 @@ use Illuminate\Support\Facades\DB;
  * partir de um manifesto JSON fixo (`kind: decision`, com o SHA-256 do AFD e o REP).
  *
  * Simulação (`preview`): executada inteira sob AfdPrecheck::whileReadOnly()
- * (sessão MySQL somente leitura e bloqueio de qualquer comando que não seja SELECT):
+ * (sessão MySQL ou MariaDB somente leitura e bloqueio de qualquer comando que não seja SELECT):
  * nada é gravado. Para cada linha, valida:
  * - a linha do AFD (SHA-256, tipo 3, NSR, marcação válida) e a pendência registrada (mesma
  *   linha e SHA-256);
@@ -64,7 +64,8 @@ use Illuminate\Support\Facades\DB;
  * revogada passa a `superseded` e a pendência volta a `pending`, sem os campos `decided_*`
  * e com o ponto manual relacionado da auditoria; na revogação de `recover`, apaga só
  * aquele ponto e marca o vínculo em `afd_recovered_points` como `reverted`). Exige o
- * responsável e a identidade esperada do banco, recusa produção e
+ * responsável e a identidade esperada do banco; em produção, exige `--production` e a
+ * aplicação em manutenção (AfdHistoricalCorrection::assertTarget), e
  * executa uma única transação: trava as pendências e os pontos manuais do manifesto,
  * reavalia tudo como na simulação e só grava se o resultado for `valid` e se cada linha
  * trouxer `expected_consequence_sha256` igual ao recalculado (a consequência aprovada na
@@ -169,12 +170,13 @@ class AfdHistoricalDecisions
      *
      * @param  array<string, mixed>  $manifest
      * @param  array<string, ?string>  $expected
+     * @param  bool  $productionAuthorized  Autorização explícita para gravar em produção (exige manutenção).
      *
      * @throws DomainException
      */
-    public function recordApproval(array $manifest, string $contents, User $approver, array $expected): AfdDecisionApproval
+    public function recordApproval(array $manifest, string $contents, User $approver, array $expected, bool $productionAuthorized = false): AfdDecisionApproval
     {
-        $target = $this->correction->assertTarget($expected);
+        $target = $this->correction->assertTarget($expected, $productionAuthorized);
         $approvedFrom = $manifest['approved_from'] ?? [];
 
         if (! AfdDecisionApproval::isAvailable()) {
@@ -206,7 +208,7 @@ class AfdHistoricalDecisions
      * Gravação das decisões do manifesto (recover, retain_manual, discard, defer e revoke).
      * Exige aprovação registrada (recordApproval) para o SHA-256 exato do manifesto.
      *
-     * @param  array{operator?: string, expected?: array<string, ?string>}  $apply
+     * @param  array{operator?: string, production?: bool, expected?: array<string, ?string>}  $apply
      * @return array<string, mixed>
      *
      * @throws DomainException
@@ -220,7 +222,7 @@ class AfdHistoricalDecisions
             throw new DomainException('Informe o responsável pela operação. Nada foi gravado.');
         }
 
-        $target = $this->correction->assertTarget($apply['expected'] ?? []);
+        $target = $this->correction->assertTarget($apply['expected'] ?? [], (bool) ($apply['production'] ?? false));
         $this->periodConflicts = [];
 
         if (! AfdDecisionApproval::isAvailable()) {

@@ -74,7 +74,7 @@ class AfdPointAnnotations
     }
 
     /**
-     * @param  array{operator?: string, expected?: array<string, ?string>}  $apply
+     * @param  array{operator?: string, production?: bool, expected?: array<string, ?string>}  $apply
      * @return array<string, mixed>
      *
      * @throws DomainException
@@ -88,7 +88,7 @@ class AfdPointAnnotations
             throw new DomainException('Informe o responsável pela operação. Nada foi gravado.');
         }
 
-        $target = $this->correction->assertTarget($apply['expected'] ?? []);
+        $target = $this->correction->assertTarget($apply['expected'] ?? [], (bool) ($apply['production'] ?? false));
 
         return ['mode' => 'apply', 'target' => $target, ...DB::transaction(fn () => $this->persist($manifest, $manifestHash, $lines, $target, $operator))];
     }

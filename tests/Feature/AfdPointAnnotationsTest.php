@@ -18,6 +18,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Once;
 use Tests\Support\AfdFileBuilder;
 use Tests\Support\LegacyAfdScenario;
+use Tests\Support\ProductionMode;
 
 /**
  * Anotações do RH sobre pontos importados do AFD (F7): só registro, sem alterar `points`
@@ -95,6 +96,7 @@ beforeEach(function () {
  * seguida no mesmo processo não truncam as tabelas.
  */
 afterEach(function () {
+    ProductionMode::leave();
     AfdFileBuilder::deleteWrittenFiles();
     Schema::withoutForeignKeyConstraints(fn () => collect(Schema::getTableListing(schemaQualified: false))
         ->reject(fn (string $table) => $table === 'migrations')
@@ -289,4 +291,30 @@ test('without the migration the mirror, the points screen protection and the pre
         Schema::rename('afd_point_decisions_ausente', 'afd_point_decisions');
         Once::flush();
     }
+});
+
+describe('production', function () {
+    test('applying annotations in production requires --production and maintenance', function (bool $authorized, bool $down, string $message) {
+        $manifest = ($this->approved)([($this->row)(5, 'disregard', $this->evidence)]);
+        ProductionMode::enter($down);
+
+        expect(fn () => $this->annotations->apply($manifest, $this->path, [...$this->apply, 'production' => $authorized]))->toThrow(DomainException::class, $message)
+            ->and(AfdPointDecision::query()->count())->toBe(0);
+    })->with([
+        'no authorization, in maintenance' => [false, true, 'sem autorização explícita (--production)'],
+        'no authorization, online' => [false, false, 'sem autorização explícita (--production)'],
+        'authorized, online' => [true, false, 'exige a aplicação em manutenção (php artisan down)'],
+    ]);
+
+    test('the command forwards --production and records in maintenance', function () {
+        $manifest = ($this->approved)([($this->row)(5, 'disregard', $this->evidence)]);
+        $identity = ['--expect-host' => $this->apply['expected']['hostname'], '--expect-server-uuid' => $this->apply['expected']['server_uuid'], '--expect-database' => $this->apply['expected']['database']];
+        ProductionMode::enter(true);
+
+        expect(Artisan::call('afd:point-annotations', ['action' => 'preview', '--manifest' => $manifest, '--afd' => $this->path]))->toBe(0)
+            ->and(Artisan::call('afd:point-annotations', ['action' => 'apply', '--manifest' => $manifest, '--afd' => $this->path, '--operator' => 'ensaio', ...$identity]))->toBe(1)
+            ->and(Artisan::output())->toContain('sem autorização explícita (--production)')
+            ->and(Artisan::call('afd:point-annotations', ['action' => 'apply', '--manifest' => $manifest, '--afd' => $this->path, '--operator' => 'ensaio', '--production' => true, ...$identity]))->toBe(0)
+            ->and(AfdPointDecision::query()->count())->toBe(1);
+    });
 });

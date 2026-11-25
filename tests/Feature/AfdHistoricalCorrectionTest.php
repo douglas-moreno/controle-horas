@@ -11,13 +11,13 @@ use App\Models\Point;
 use App\Services\AfdHistoricalCorrection;
 use App\Services\AfdImporter;
 use App\Services\AfdPrecheck;
-use Illuminate\Contracts\Foundation\MaintenanceMode;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Tests\Support\AfdFileBuilder;
 use Tests\Support\LegacyAfdScenario;
+use Tests\Support\ProductionMode;
 
 /**
  * A simulação (sem apply) usa a sessão somente leitura do MySQL, que só vale fora de uma
@@ -56,39 +56,12 @@ beforeEach(function () {
  * seguida no mesmo processo não truncam as tabelas.
  */
 afterEach(function () {
-    app()['env'] = 'testing';
+    ProductionMode::leave();
     AfdFileBuilder::deleteWrittenFiles();
     Schema::withoutForeignKeyConstraints(fn () => collect(Schema::getTableListing(schemaQualified: false))
         ->reject(fn (string $table) => $table === 'migrations')
         ->each(fn (string $table) => DB::table($table)->truncate()));
 });
-
-/**
- * Simula o ambiente de produção e o modo de manutenção sem gravar storage/framework/down,
- * que derrubaria os testes HTTP executados em paralelo.
- */
-function correctionInProduction(bool $down): void
-{
-    app()['env'] = 'production';
-    app()->instance(MaintenanceMode::class, new class($down) implements MaintenanceMode
-    {
-        public function __construct(private bool $down) {}
-
-        public function activate(array $payload): void {}
-
-        public function deactivate(): void {}
-
-        public function active(): bool
-        {
-            return $this->down;
-        }
-
-        public function data(): array
-        {
-            return [];
-        }
-    });
-}
 
 describe('quarantine', function () {
     test('the dry run validates the manifest without writing anything', function () {
@@ -329,7 +302,7 @@ describe('registration and target', function () {
 
     test('production requires the explicit authorization and the application in maintenance', function (bool $authorized, bool $down, string $message) {
         $state = ($this->snapshot)();
-        correctionInProduction($down);
+        ProductionMode::enter($down);
 
         expect(fn () => $this->correction->register($this->manifests['registration'], $this->scenario->path, [...$this->apply, 'production' => $authorized]))
             ->toThrow(DomainException::class, $message);
@@ -342,7 +315,7 @@ describe('registration and target', function () {
     ]);
 
     test('production with the explicit authorization and in maintenance applies the batch', function () {
-        correctionInProduction(true);
+        ProductionMode::enter(true);
 
         expect($this->correction->register($this->manifests['registration'], $this->scenario->path, [...$this->apply, 'production' => true]))
             ->toMatchArray(['mode' => 'apply', 'status' => 'applied', 'rows' => 7])
@@ -350,7 +323,7 @@ describe('registration and target', function () {
     });
 
     test('the command forwards --production and the simulation never needs it', function () {
-        correctionInProduction(true);
+        ProductionMode::enter(true);
         $options = ['--manifest' => $this->manifests['registration'], '--afd' => $this->scenario->path];
         $identity = ['--operator' => 'ensaio', '--expect-host' => $this->apply['expected']['hostname'], '--expect-server-uuid' => $this->apply['expected']['server_uuid'], '--expect-database' => $this->apply['expected']['database']];
 

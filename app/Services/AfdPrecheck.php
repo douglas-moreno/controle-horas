@@ -31,7 +31,7 @@ use LogicException;
  * (AfdImporter::withheldAhead) não contam como novas: aparecem em `records.withheld`.
  *
  * Isolamento de leitura em duas camadas, ativas durante toda a análise:
- * 1. a sessão MySQL é colocada em `SET SESSION TRANSACTION READ ONLY` e o valor de
+ * 1. a sessão MySQL ou MariaDB é colocada em `SET SESSION TRANSACTION READ ONLY` e o valor de
  *    `@@session.transaction_read_only` é conferido antes da análise; o modo anterior é
  *    restaurado ao final, com ou sem erro;
  * 2. um bloqueio na conexão interrompe, antes da execução, qualquer comando que não seja
@@ -80,7 +80,7 @@ class AfdPrecheck
     }
 
     /**
-     * Executa o callback com a sessão MySQL em modo somente leitura e com o bloqueio de
+     * Executa o callback com a sessão MySQL ou MariaDB em modo somente leitura e com o bloqueio de
      * escrita da conexão ativo.
      *
      * @template TResult
@@ -130,7 +130,7 @@ class AfdPrecheck
             $connection->statement('SET SESSION TRANSACTION READ ONLY');
 
             if (! $this->sessionReadOnly($connection)) {
-                throw new DomainException('Não foi possível confirmar a sessão somente leitura do MySQL. Nada foi analisado.');
+                throw new DomainException('Não foi possível confirmar a sessão somente leitura do banco. Nada foi analisado.');
             }
 
             return $callback();

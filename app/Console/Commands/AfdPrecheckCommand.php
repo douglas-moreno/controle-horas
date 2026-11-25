@@ -7,6 +7,7 @@ use DomainException;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
 use LogicException;
 
 /**
@@ -162,7 +163,7 @@ class AfdPrecheckCommand extends Command
             ? $this->info('Resultado: sem bloqueios — o arquivo pode seguir para uma importação supervisionada.')
             : $this->error('Resultado: BLOQUEADO — o arquivo não deve ser importado.');
         $this->warn($report['notice']);
-        $this->line('Isolamento: sessão MySQL somente leitura confirmada; comandos executados: '.collect($report['read_only']['statements'])->map(fn ($count, $verb) => $verb.' '.$count)->implode(', ').'.');
+        $this->line('Isolamento: sessão '.(DB::connection()->getDriverName() === 'mariadb' ? 'MariaDB' : 'MySQL').' somente leitura confirmada; comandos executados: '.collect($report['read_only']['statements'])->map(fn ($count, $verb) => $verb.' '.$count)->implode(', ').'.');
     }
 
     /**

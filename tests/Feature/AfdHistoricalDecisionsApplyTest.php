@@ -1,10 +1,12 @@
 <?php
 
 use App\Models\AfdCorrectionBatch;
+use App\Models\AfdDecisionApproval;
 use App\Models\AfdHistoricalNsr;
 use App\Models\AfdHistoricalNsrDecision;
 use App\Models\Employee;
 use App\Models\Point;
+use App\Models\User;
 use App\Services\AfdHistoricalCorrection;
 use App\Services\AfdHistoricalDecisions;
 use App\Services\AfdPrecheck;
@@ -14,6 +16,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Tests\Support\AfdFileBuilder;
 use Tests\Support\LegacyAfdScenario;
+use Tests\Support\ProductionMode;
 
 /**
  * Gravação das decisões do RH (F2: retain_manual, discard, defer; a recuperação, F4, tem
@@ -101,6 +104,7 @@ beforeEach(function () {
  * seguida no mesmo processo não truncam as tabelas.
  */
 afterEach(function () {
+    ProductionMode::leave();
     AfdFileBuilder::deleteWrittenFiles();
     Schema::withoutForeignKeyConstraints(fn () => collect(Schema::getTableListing(schemaQualified: false))
         ->reject(fn (string $table) => $table === 'migrations')
@@ -261,4 +265,62 @@ test('a direct deletion in the database bypasses the protection and blocks the p
 
     expect($report['verdict'])->toBe(AfdPrecheck::VERDICT_BLOCKED)
         ->and($report['coverage']['inconsistencies'])->toBe(['NSR 3: manutenção de ponto manual inexistente.']);
+});
+
+describe('production', function () {
+    test('applying decisions in production requires --production and maintenance', function (bool $authorized, bool $down, string $message) {
+        $manifest = ($this->approved)(($this->standard)());
+        $before = ($this->tables)();
+        ProductionMode::enter($down);
+
+        expect(fn () => $this->decisions->apply($manifest, $this->scenario->path, [...$this->apply, 'production' => $authorized]))->toThrow(DomainException::class, $message)
+            ->and(($this->tables)())->toBe($before);
+    })->with([
+        'no authorization, in maintenance' => [false, true, 'sem autorização explícita (--production)'],
+        'no authorization, online' => [false, false, 'sem autorização explícita (--production)'],
+        'authorized, online' => [true, false, 'exige a aplicação em manutenção (php artisan down)'],
+    ]);
+
+    test('authorized and in maintenance the decisions are applied', function () {
+        $manifest = ($this->approved)(($this->standard)());
+        ProductionMode::enter(true);
+
+        expect($this->decisions->apply($manifest, $this->scenario->path, [...$this->apply, 'production' => true]))->toMatchArray(['status' => 'applied'])
+            ->and(AfdHistoricalNsrDecision::count())->toBe(3);
+    });
+
+    test('the command forwards --production and the preview never needs it', function () {
+        $manifest = ($this->approved)(($this->standard)());
+        ProductionMode::enter(true);
+
+        $this->artisan('afd:decisions', ['action' => 'preview', '--manifest' => $manifest, '--afd' => $this->scenario->path])
+            ->expectsOutputToContain('"status": "valid"')
+            ->assertSuccessful();
+
+        $this->artisan('afd:decisions', ['action' => 'apply', '--manifest' => $manifest, '--afd' => $this->scenario->path, '--operator' => 'ensaio', ...$this->identity])
+            ->expectsOutputToContain('sem autorização explícita (--production)')
+            ->assertFailed();
+
+        $this->artisan('afd:decisions', ['action' => 'apply', '--manifest' => $manifest, '--afd' => $this->scenario->path, '--operator' => 'ensaio', '--production' => true, ...$this->identity])
+            ->expectsOutputToContain('"status": "applied"')
+            ->assertSuccessful();
+
+        expect(AfdHistoricalNsrDecision::count())->toBe(3);
+    });
+
+    test('recording an approval in production requires --production and maintenance', function () {
+        $approver = User::factory()->create();
+        $contents = json_encode(['rows' => [['nsr' => 3]], 'approved_from' => ['approved_by' => ['user_id' => $approver->id], 'manifest_sha256' => str_repeat('a', 64), 'preview_sha256' => str_repeat('b', 64), 'approved_at' => '2026-11-25T10:00:00-03:00']]);
+        $manifest = json_decode($contents, true);
+        $expected = $this->apply['expected'];
+
+        ProductionMode::enter(false);
+        expect(fn () => $this->decisions->recordApproval($manifest, $contents, $approver, $expected))->toThrow(DomainException::class, 'sem autorização explícita (--production)')
+            ->and(fn () => $this->decisions->recordApproval($manifest, $contents, $approver, $expected, true))->toThrow(DomainException::class, 'exige a aplicação em manutenção');
+
+        ProductionMode::enter(true);
+        expect(fn () => $this->decisions->recordApproval($manifest, $contents, $approver, $expected))->toThrow(DomainException::class, 'sem autorização explícita (--production)')
+            ->and(AfdDecisionApproval::query()->where('manifest_sha256', hash('sha256', $contents))->exists())->toBeFalse()
+            ->and($this->decisions->recordApproval($manifest, $contents, $approver, $expected, true)->manifest_sha256)->toBe(hash('sha256', $contents));
+    });
 });

@@ -16,7 +16,8 @@ use LogicException;
  *   Código de saída 0 quando válido; 1 em recusa ou erro.
  * - `apply`: grava as anotações `disregard`, `duplicate` e `revoke`; exige o responsável, a
  *   identidade esperada do banco e, em cada linha, o `expected_point_hash` da simulação
- *   aprovada. Código de saída 0 em sucesso; 1 em recusa.
+ *   aprovada. Código de saída 0 em sucesso; 1 em recusa. Em produção, só grava com
+ *   `--production` e com a aplicação em manutenção.
  */
 #[Signature('afd:point-annotations
     {action : preview ou apply}
@@ -25,7 +26,8 @@ use LogicException;
     {--operator= : Responsável pela operação (obrigatório em apply)}
     {--expect-host= : @@hostname esperado do banco (apply)}
     {--expect-server-uuid= : @@server_uuid (MySQL) ou @@server_uid (MariaDB) esperado do banco (apply)}
-    {--expect-database= : Nome esperado do banco (apply)}')]
+    {--expect-database= : Nome esperado do banco (apply)}
+    {--production : Autoriza gravar no ambiente de produção (apply; exige a aplicação em manutenção)}')]
 #[Description('Anotações do RH sobre pontos importados do AFD: simulação e gravação')]
 class AfdPointAnnotationsCommand extends Command
 {
@@ -39,6 +41,7 @@ class AfdPointAnnotationsCommand extends Command
                 'preview' => $annotations->preview($manifest, $afd),
                 'apply' => $annotations->apply($manifest, $afd, [
                     'operator' => (string) $this->option('operator'),
+                    'production' => (bool) $this->option('production'),
                     'expected' => [
                         'hostname' => $this->option('expect-host'),
                         'server_uuid' => $this->option('expect-server-uuid'),

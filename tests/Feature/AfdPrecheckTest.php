@@ -448,7 +448,7 @@ describe('command', function () {
         expect($exitCode)->toBe(0)
             ->and($output)->toContain('Resultado: sem bloqueios')
             ->and($output)->toContain(AfdPrecheck::NOT_AN_AUTHORIZATION)
-            ->and($output)->toContain('Isolamento: sessão MySQL somente leitura confirmada')
+            ->and($output)->toContain('Isolamento: sessão '.(DB::connection()->getDriverName() === 'mariadb' ? 'MariaDB' : 'MySQL').' somente leitura confirmada')
             ->and(Point::count())->toBe(0)
             ->and(AfdRep::count())->toBe(0)
             ->and(AfdImport::count())->toBe(0);

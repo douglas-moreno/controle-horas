@@ -145,7 +145,7 @@ php artisan afd:decisions apply --manifest=<json> --afd=<AFD> --operator="<nome>
 **Pré-requisitos:**
 - só aceita `recover` (desde a F4), `retain_manual`, `discard` e `defer`; `revoke` no manifesto recusa o lote inteiro;
 - cada linha precisa trazer `expected_consequence_sha256`, com o valor de `consequence_sha256` da simulação aprovada pelo RH;
-- exige o responsável (`--operator`) e a identidade do banco, e recusa produção (`AfdHistoricalCorrection::assertTarget`). A autorização `--production` existe só em `afd:correction`; `afd:decisions` continua recusando produção.
+- exige o responsável (`--operator`) e a identidade do banco (`AfdHistoricalCorrection::assertTarget`). Em produção, `apply` e `approve` (e `afd:point-annotations apply`) só gravam com a autorização explícita `--production` e com a aplicação em manutenção (`php artisan down`), como `afd:correction`; `convert` e `preview` não gravam e não exigem nenhum dos dois.
 
 **Execução numa transação única:**
 1. Trava as pendências e os pontos manuais do manifesto.
