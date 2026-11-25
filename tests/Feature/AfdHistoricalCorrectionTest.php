@@ -11,6 +11,7 @@ use App\Models\Point;
 use App\Services\AfdHistoricalCorrection;
 use App\Services\AfdImporter;
 use App\Services\AfdPrecheck;
+use Illuminate\Contracts\Foundation\MaintenanceMode;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
@@ -55,11 +56,39 @@ beforeEach(function () {
  * seguida no mesmo processo não truncam as tabelas.
  */
 afterEach(function () {
+    app()['env'] = 'testing';
     AfdFileBuilder::deleteWrittenFiles();
     Schema::withoutForeignKeyConstraints(fn () => collect(Schema::getTableListing(schemaQualified: false))
         ->reject(fn (string $table) => $table === 'migrations')
         ->each(fn (string $table) => DB::table($table)->truncate()));
 });
+
+/**
+ * Simula o ambiente de produção e o modo de manutenção sem gravar storage/framework/down,
+ * que derrubaria os testes HTTP executados em paralelo.
+ */
+function correctionInProduction(bool $down): void
+{
+    app()['env'] = 'production';
+    app()->instance(MaintenanceMode::class, new class($down) implements MaintenanceMode
+    {
+        public function __construct(private bool $down) {}
+
+        public function activate(array $payload): void {}
+
+        public function deactivate(): void {}
+
+        public function active(): bool
+        {
+            return $this->down;
+        }
+
+        public function data(): array
+        {
+            return [];
+        }
+    });
+}
 
 describe('quarantine', function () {
     test('the dry run validates the manifest without writing anything', function () {
@@ -297,6 +326,48 @@ describe('registration and target', function () {
         'another database' => [fn (array $apply) => [...$apply, 'expected' => [...$apply['expected'], 'database' => 'laravel']], 'diferente do esperado (database)'],
         'another host' => [fn (array $apply) => [...$apply, 'expected' => [...$apply['expected'], 'hostname' => null]], 'diferente do esperado (hostname)'],
     ]);
+
+    test('production requires the explicit authorization and the application in maintenance', function (bool $authorized, bool $down, string $message) {
+        $state = ($this->snapshot)();
+        correctionInProduction($down);
+
+        expect(fn () => $this->correction->register($this->manifests['registration'], $this->scenario->path, [...$this->apply, 'production' => $authorized]))
+            ->toThrow(DomainException::class, $message);
+
+        expect(($this->snapshot)())->toBe($state);
+    })->with([
+        'no authorization, in maintenance' => [false, true, 'recusada no ambiente de produção sem autorização explícita (--production)'],
+        'no authorization, online' => [false, false, 'recusada no ambiente de produção sem autorização explícita (--production)'],
+        'authorized, online' => [true, false, 'exige a aplicação em manutenção (php artisan down)'],
+    ]);
+
+    test('production with the explicit authorization and in maintenance applies the batch', function () {
+        correctionInProduction(true);
+
+        expect($this->correction->register($this->manifests['registration'], $this->scenario->path, [...$this->apply, 'production' => true]))
+            ->toMatchArray(['mode' => 'apply', 'status' => 'applied', 'rows' => 7])
+            ->and(AfdHistoricalNsr::query()->count())->toBe(7);
+    });
+
+    test('the command forwards --production and the simulation never needs it', function () {
+        correctionInProduction(true);
+        $options = ['--manifest' => $this->manifests['registration'], '--afd' => $this->scenario->path];
+        $identity = ['--operator' => 'ensaio', '--expect-host' => $this->apply['expected']['hostname'], '--expect-server-uuid' => $this->apply['expected']['server_uuid'], '--expect-database' => $this->apply['expected']['database']];
+
+        $this->artisan('afd:correction', ['action' => 'register', ...$options])->expectsOutputToContain('"mode": "dry-run"')->assertSuccessful();
+        $this->artisan('afd:correction', ['action' => 'register', ...$options, ...$identity, '--apply' => true])->expectsOutputToContain('sem autorização explícita (--production)')->assertFailed();
+
+        expect(AfdHistoricalNsr::query()->count())->toBe(0);
+
+        $this->artisan('afd:correction', ['action' => 'register', ...$options, ...$identity, '--apply' => true, '--production' => true])->expectsOutputToContain('"status": "applied"')->assertSuccessful();
+
+        expect(AfdHistoricalNsr::query()->count())->toBe(7);
+    });
+
+    test('outside production the authorization is not required', function () {
+        expect(app()->isProduction())->toBeFalse()
+            ->and($this->correction->register($this->manifests['registration'], $this->scenario->path, $this->apply))->toMatchArray(['status' => 'applied']);
+    });
 
     test('a manifest for another afd file is refused', function () {
         $manifest = $this->scenario->quarantineManifest();

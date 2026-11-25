@@ -41,8 +41,9 @@ use Illuminate\Support\Facades\DB;
  *
  * Sem `apply`, tudo é simulado sob AfdPrecheck::whileReadOnly() (sessão somente leitura
  * e bloqueio de escrita). Com `apply`, exige o responsável e a identidade esperada do
- * banco (hostname, server_uuid e nome do banco), recusa o ambiente de produção e executa
- * uma única transação: qualquer divergência desfaz tudo.
+ * banco (hostname, server_uuid e nome do banco) e executa uma única transação: qualquer
+ * divergência desfaz tudo. Em produção, só grava com autorização explícita (`production`,
+ * opção --production) e com a aplicação em manutenção.
  *
  * Hash canônico de um ponto: SHA-256 dos valores, na ordem de POINT_COLUMNS, separados
  * por "\x1F"; NULL vira "\N"; números em decimal; `date` como AAAA-MM-DD e `time` como
@@ -78,15 +79,22 @@ class AfdHistoricalCorrection
     }
 
     /**
+     * Em produção, só aceita a gravação com autorização explícita (`$productionAuthorized`) e
+     * com a aplicação em manutenção (`php artisan down`), sem acesso concorrente pela tela.
+     *
      * @param  array{hostname?: ?string, server_uuid?: ?string, database?: ?string}  $expected
      * @return array{hostname: string, server_uuid: string, database: string, environment: string}
      *
      * @throws DomainException
      */
-    public function assertTarget(array $expected): array
+    public function assertTarget(array $expected, bool $productionAuthorized = false): array
     {
-        if (app()->isProduction()) {
-            throw new DomainException('Correção histórica recusada no ambiente de produção. Nada foi gravado.');
+        if (app()->isProduction() && ! $productionAuthorized) {
+            throw new DomainException('Correção histórica recusada no ambiente de produção sem autorização explícita (--production). Nada foi gravado.');
+        }
+
+        if (app()->isProduction() && ! app()->isDownForMaintenance()) {
+            throw new DomainException('Em produção, a correção histórica exige a aplicação em manutenção (php artisan down). Nada foi gravado.');
         }
 
         if (! in_array(DB::connection()->getDriverName(), self::SUPPORTED_DRIVERS, true)) {
@@ -116,7 +124,7 @@ class AfdHistoricalCorrection
     }
 
     /**
-     * @param  array{operator?: string, expected?: array<string, ?string>}|null  $apply  null = simulação.
+     * @param  array{operator?: string, production?: bool, expected?: array<string, ?string>}|null  $apply  null = simulação.
      * @return array<string, mixed>
      */
     public function register(string $manifestPath, string $afdPath, ?array $apply = null): array
@@ -163,7 +171,7 @@ class AfdHistoricalCorrection
     }
 
     /**
-     * @param  array{operator?: string, expected?: array<string, ?string>}|null  $apply
+     * @param  array{operator?: string, production?: bool, expected?: array<string, ?string>}|null  $apply
      * @return array<string, mixed>
      */
     public function quarantine(string $manifestPath, string $afdPath, ?array $apply = null): array
@@ -239,7 +247,7 @@ class AfdHistoricalCorrection
     }
 
     /**
-     * @param  array{operator?: string, expected?: array<string, ?string>}|null  $apply  null = simulação.
+     * @param  array{operator?: string, production?: bool, expected?: array<string, ?string>}|null  $apply  null = simulação.
      * @return array<string, mixed>
      */
     public function withhold(string $manifestPath, string $afdPath, ?array $apply = null): array
@@ -286,7 +294,7 @@ class AfdHistoricalCorrection
     }
 
     /**
-     * @param  array{operator?: string, expected?: array<string, ?string>}|null  $apply
+     * @param  array{operator?: string, production?: bool, expected?: array<string, ?string>}|null  $apply
      * @return array<string, mixed>
      */
     public function restore(int $batchId, ?array $apply = null): array
@@ -336,7 +344,7 @@ class AfdHistoricalCorrection
     }
 
     /**
-     * @param  array{operator?: string, expected?: array<string, ?string>}|null  $apply
+     * @param  array{operator?: string, production?: bool, expected?: array<string, ?string>}|null  $apply
      * @return array<string, mixed>
      */
     public function recover(string $manifestPath, string $afdPath, ?array $apply = null): array
@@ -411,7 +419,7 @@ class AfdHistoricalCorrection
     }
 
     /**
-     * @param  array{operator?: string, expected?: array<string, ?string>}|null  $apply
+     * @param  array{operator?: string, production?: bool, expected?: array<string, ?string>}|null  $apply
      * @return array<string, mixed>
      */
     public function revert(int $batchId, ?array $apply = null): array
@@ -455,7 +463,7 @@ class AfdHistoricalCorrection
     /**
      * Simulação somente leitura ou gravação numa transação, conforme `apply`.
      *
-     * @param  array{operator?: string, expected?: array<string, ?string>}|null  $apply
+     * @param  array{operator?: string, production?: bool, expected?: array<string, ?string>}|null  $apply
      * @param  Closure(bool, ?array<string, string>, string): array<string, mixed>  $operation
      * @return array<string, mixed>
      */
@@ -471,7 +479,7 @@ class AfdHistoricalCorrection
             throw new DomainException('Informe o responsável pela operação. Nada foi gravado.');
         }
 
-        $target = $this->assertTarget($apply['expected'] ?? []);
+        $target = $this->assertTarget($apply['expected'] ?? [], (bool) ($apply['production'] ?? false));
         $timeZone = DB::selectOne('select @@session.time_zone as tz')->tz;
         DB::statement("set time_zone = '+00:00'");
 

@@ -24,7 +24,8 @@ use LogicException;
     {--operator= : Responsável pela operação (obrigatório com --apply)}
     {--expect-host= : @@hostname esperado do banco}
     {--expect-server-uuid= : @@server_uuid (MySQL) ou @@server_uid (MariaDB) esperado do banco}
-    {--expect-database= : Nome esperado do banco}')]
+    {--expect-database= : Nome esperado do banco}
+    {--production : Autoriza gravar no ambiente de produção (exige a aplicação em manutenção)}')]
 #[Description('Correção histórica do AFD: pendências, quarentena, recuperação, retenção por decisão do RH e reversões')]
 class AfdCorrectionCommand extends Command
 {
@@ -32,6 +33,7 @@ class AfdCorrectionCommand extends Command
     {
         $apply = $this->option('apply') ? [
             'operator' => (string) $this->option('operator'),
+            'production' => (bool) $this->option('production'),
             'expected' => [
                 'hostname' => $this->option('expect-host'),
                 'server_uuid' => $this->option('expect-server-uuid'),

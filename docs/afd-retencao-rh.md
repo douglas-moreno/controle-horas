@@ -68,7 +68,7 @@ O manifesto é recusado por inteiro, sem gravar nada, se:
 - o NSR estiver até o cursor atual do REP (`AfdImporter::startFor`). Esse caso é pendência histórica (`register`), não retenção;
 - o NSR já estiver gravado em `points` (REP + NSR), já registrado em `afd_historical_nsrs` ou já rejeitado.
 
-Com `--apply` também são exigidos o responsável e a identidade do banco (hostname, server_uuid e nome). Em produção, como as demais ações de correção, a ação é recusada.
+Com `--apply` também são exigidos o responsável e a identidade do banco (hostname, server_uuid e nome). Em produção, como as demais ações de `afd:correction`, a gravação só é aceita com a autorização explícita `--production` e com a aplicação em manutenção (`php artisan down`); sem as duas, é recusada. A simulação (sem `--apply`) é somente leitura e não exige nenhuma das duas.
 
 > **MariaDB:** os comandos AFD aceitam os drivers `mysql` e `mariadb`. O MariaDB não tem `@@server_uuid`; nele a identidade usa `@@server_uid` (ex.: `/8dnak9wx+VxsajV8B7y9MZ3RGY=`). A opção continua `--expect-server-uuid`: informe o valor de `SELECT @@server_uid`.
 
