@@ -59,13 +59,20 @@ class AfdHistoricalCorrection
     public function __construct(private AfdParser $parser, private AfdLegacyAlignment $alignment, private AfdPrecheck $precheck, private AfdImporter $importer) {}
 
     /**
-     * Identidade do banco da conexão padrão.
+     * Drivers com sessão somente leitura e identidade de servidor conferíveis.
+     */
+    public const SUPPORTED_DRIVERS = ['mysql', 'mariadb'];
+
+    /**
+     * Identidade do banco da conexão padrão. O MariaDB não tem `@@server_uuid`; o
+     * identificador equivalente, único por servidor, é `@@server_uid`.
      *
      * @return array{hostname: string, server_uuid: string, database: string, environment: string}
      */
     public function target(): array
     {
-        $row = DB::selectOne('select @@hostname as hostname, @@server_uuid as server_uuid, database() as db');
+        $serverIdentifier = DB::connection()->getDriverName() === 'mariadb' ? '@@server_uid' : '@@server_uuid';
+        $row = DB::selectOne('select @@hostname as hostname, '.$serverIdentifier.' as server_uuid, database() as db');
 
         return ['hostname' => (string) $row->hostname, 'server_uuid' => (string) $row->server_uuid, 'database' => (string) $row->db, 'environment' => (string) app()->environment()];
     }
@@ -82,8 +89,8 @@ class AfdHistoricalCorrection
             throw new DomainException('Correção histórica recusada no ambiente de produção. Nada foi gravado.');
         }
 
-        if (DB::connection()->getDriverName() !== 'mysql') {
-            throw new DomainException('A correção histórica exige MySQL. Nada foi gravado.');
+        if (! in_array(DB::connection()->getDriverName(), self::SUPPORTED_DRIVERS, true)) {
+            throw new DomainException('A correção histórica exige MySQL ou MariaDB. Nada foi gravado.');
         }
 
         $target = $this->target();

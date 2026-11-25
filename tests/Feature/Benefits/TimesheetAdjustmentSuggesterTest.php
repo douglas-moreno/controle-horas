@@ -23,6 +23,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Livewire\Livewire;
+use Tests\TestCase;
 
 uses(RefreshDatabase::class);
 
@@ -636,7 +637,7 @@ describe('participants', function () {
     });
 
     test('an empty recision date is not a rescission', function () {
-        if (DB::getDriverName() === 'mysql') {
+        if (in_array(DB::getDriverName(), TestCase::TEST_DRIVERS, true)) {
             $this->markTestSkipped('O MySQL estrito não grava string vazia em coluna datetime; o valor só existe no SQLite legado.');
         }
 

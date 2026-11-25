@@ -23,7 +23,7 @@ use LogicException;
     {--apply : Grava; sem esta opção, apenas simula}
     {--operator= : Responsável pela operação (obrigatório com --apply)}
     {--expect-host= : @@hostname esperado do banco}
-    {--expect-server-uuid= : @@server_uuid esperado do banco}
+    {--expect-server-uuid= : @@server_uuid (MySQL) ou @@server_uid (MariaDB) esperado do banco}
     {--expect-database= : Nome esperado do banco}')]
 #[Description('Correção histórica do AFD: pendências, quarentena, recuperação, retenção por decisão do RH e reversões')]
 class AfdCorrectionCommand extends Command

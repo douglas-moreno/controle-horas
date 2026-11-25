@@ -47,7 +47,8 @@ test('the skipped_justified migration is reversible and fills previous runs with
 
         expect($after['skipped_justified'])->toBe(0)
             ->and(collect($after)->except('skipped_justified')->all())->toEqual($before)
-            ->and($column['type'])->toBe('int unsigned')
+            ->and($column['type_name'])->toBe('int')
+            ->and($column['type'])->toEndWith(' unsigned')
             ->and($column['nullable'])->toBeFalse()
             ->and((string) $column['default'])->toBe('0')
             ->and(array_search('skipped_justified', $columnNames, true))->toBe(array_search('skipped_covered', $columnNames, true) + 1);

@@ -48,7 +48,7 @@ use LogicException;
     {--approver= : E-mail do usuário do sistema que aprova; a senha é pedida (approve)}
     {--operator= : Responsável pela operação (obrigatório em apply)}
     {--expect-host= : @@hostname esperado do banco (approve, apply)}
-    {--expect-server-uuid= : @@server_uuid esperado do banco (approve, apply)}
+    {--expect-server-uuid= : @@server_uuid (MySQL) ou @@server_uid (MariaDB) esperado do banco (approve, apply)}
     {--expect-database= : Nome esperado do banco (approve, apply)}')]
 #[Description('Decisões do RH sobre pendências históricas do AFD: conversão da matriz, simulação, aprovação e gravação')]
 class AfdDecisionsCommand extends Command

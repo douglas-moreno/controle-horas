@@ -16,6 +16,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Tests\Support\AfdFileBuilder;
+use Tests\TestCase;
 
 uses(RefreshDatabase::class);
 
@@ -336,7 +337,7 @@ describe('cursors and rejections', function () {
 
         expect($locks[0]['level'])->toBeGreaterThan($level);
 
-        if (DB::getDriverName() === 'mysql') {
+        if (in_array(DB::getDriverName(), TestCase::TEST_DRIVERS, true)) {
             expect($locks[0]['for_update'])->toBeTrue();
         }
     });

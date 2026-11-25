@@ -22,6 +22,11 @@ abstract class TestCase extends BaseTestCase
      */
     public const TEST_DATABASE_PATTERN = '/^testing(?:_test_[1-9][0-9]*)?\z/';
 
+    /**
+     * Drivers aceitos pelos testes: MySQL (desenvolvimento) e MariaDB (servidor).
+     */
+    public const TEST_DRIVERS = ['mysql', 'mariadb'];
+
     public static function isTestDatabase(string $database): bool
     {
         return preg_match(self::TEST_DATABASE_PATTERN, $database) === 1;
@@ -35,8 +40,8 @@ abstract class TestCase extends BaseTestCase
         $driver = $app['config']->get("database.connections.{$connection}.driver");
         $database = $app['config']->get("database.connections.{$connection}.database");
 
-        if ($driver !== 'mysql' || $database !== self::TEST_DATABASE) {
-            throw new RuntimeException("Testes exigem MySQL no banco '".self::TEST_DATABASE."'; conexão atual: {$driver} / {$database}.");
+        if (! in_array($driver, self::TEST_DRIVERS, true) || $database !== self::TEST_DATABASE) {
+            throw new RuntimeException("Testes exigem MySQL ou MariaDB no banco '".self::TEST_DATABASE."'; conexão atual: {$driver} / {$database}.");
         }
 
         return $app;

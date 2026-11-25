@@ -16,6 +16,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Tests\TestCase;
 
 uses(RefreshDatabase::class);
 
@@ -669,7 +670,7 @@ describe('concurrency', function () {
             ->and($queries[$lockIndex]['level'])->toBeGreaterThan(1)
             ->and($queries[$insertIndex]['level'])->toBe($queries[$lockIndex]['level']);
 
-        if (DB::getDriverName() === 'mysql') {
+        if (in_array(DB::getDriverName(), TestCase::TEST_DRIVERS, true)) {
             expect($queries[$lockIndex]['sql'])->toContain('for update');
         }
     });

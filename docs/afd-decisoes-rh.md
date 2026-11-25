@@ -102,7 +102,7 @@ php artisan afd:decisions preview --manifest=<json> --afd=<AFD>
 ```
 
 **Execução**:
-- roda inteira sob `AfdPrecheck::whileReadOnly()`, com a sessão MySQL em modo somente leitura e bloqueio de qualquer comando que não seja SELECT;
+- roda inteira sob `AfdPrecheck::whileReadOnly()`, com a sessão MySQL ou MariaDB em modo somente leitura e bloqueio de qualquer comando que não seja SELECT;
 - é recusada dentro de uma transação aberta;
 - o relatório traz `writes: none` e não contém PIS.
 

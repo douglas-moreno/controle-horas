@@ -30,7 +30,7 @@ $app->make(Kernel::class)->bootstrap();
 $connection = (string) config('database.default');
 $database = (string) config("database.connections.{$connection}.database");
 
-if (! app()->environment('testing') || config("database.connections.{$connection}.driver") !== 'mysql' || ! TestCase::isTestDatabase($database)
+if (! app()->environment('testing') || ! in_array(config("database.connections.{$connection}.driver"), TestCase::TEST_DRIVERS, true) || ! TestCase::isTestDatabase($database)
     || DB::selectOne('select database() as name')->name !== $database) {
     fwrite(STDERR, "Banco diferente de testing ou testing_test_N: abortado.\n");
     exit(2);

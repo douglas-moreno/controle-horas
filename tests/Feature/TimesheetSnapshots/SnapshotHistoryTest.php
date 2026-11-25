@@ -174,7 +174,7 @@ describe('divergence notice', function () {
             ->and($notice['message'])->toContain('Fechamento da competência (original), versão 1, registrado em')
             ->and($notice['message'])->toContain('por Analista RH')
             ->and($notice['message'])->toContain('não têm versões intermediárias preservadas')
-            ->and($notice['fields'])->toBe(['Atraso', 'Ocorrência', 'Quantidade de marcações', 'Conferência', 'Abono'])
+            ->and($notice['fields'])->toBe(['Quantidade de marcações', 'Ocorrência', 'Conferência', 'Atraso', 'Abono'])
             ->and($notice['reference']['id'])->toBe(($this->version)($this->ana, '2026-09-15', 1)->id)
             ->and(($this->rows)())->toBe($before);
     });
@@ -234,3 +234,10 @@ describe('divergence notice', function () {
         expect(($this->rows)())->toBe($before);
     });
 });
+
+test('the divergent field labels follow the label order whatever the stored JSON key order', function (array $fields) {
+    expect(TimesheetSnapshotHistory::fieldLabels($fields))->toBe(['Quantidade de marcações', 'Ocorrência', 'Conferência', 'Atraso', 'Abono', 'Outros dados do dia']);
+})->with([
+    'mysql key order' => [['late_entry_minutes', 'status', 'unknown_field', 'punch_count', 'needs_review', 'allowed_delay_minutes', 'delay_minutes']],
+    'insertion key order' => [['punch_count', 'unknown_field', 'status', 'needs_review', 'delay_minutes', 'late_entry_minutes', 'allowed_delay_minutes']],
+]);

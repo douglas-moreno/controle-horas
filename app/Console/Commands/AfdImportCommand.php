@@ -21,7 +21,7 @@ use Illuminate\Console\Command;
     {path : Caminho do arquivo AFD}
     {--operator= : Responsável pela importação (obrigatório)}
     {--expect-host= : @@hostname esperado do banco}
-    {--expect-server-uuid= : @@server_uuid esperado do banco}
+    {--expect-server-uuid= : @@server_uuid (MySQL) ou @@server_uid (MariaDB) esperado do banco}
     {--expect-database= : Nome esperado do banco}')]
 #[Description('Importação supervisionada de um AFD, com conferência do banco de destino')]
 class AfdImportCommand extends Command

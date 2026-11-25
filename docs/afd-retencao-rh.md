@@ -70,6 +70,8 @@ O manifesto é recusado por inteiro, sem gravar nada, se:
 
 Com `--apply` também são exigidos o responsável e a identidade do banco (hostname, server_uuid e nome). Em produção, como as demais ações de correção, a ação é recusada.
 
+> **MariaDB:** os comandos AFD aceitam os drivers `mysql` e `mariadb`. O MariaDB não tem `@@server_uuid`; nele a identidade usa `@@server_uid` (ex.: `/8dnak9wx+VxsajV8B7y9MZ3RGY=`). A opção continua `--expect-server-uuid`: informe o valor de `SELECT @@server_uid`.
+
 ### Importação (`AfdImporter::persist`)
 
 A importação roda numa transação única, com a linha do REP travada:

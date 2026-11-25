@@ -316,7 +316,7 @@ Comportamento já implementado na F6.2b–F6.2d, agora coberto de ponta a ponta 
 
 ## 13. Testes
 
-MySQL 8 no banco `testing` (no modo paralelo, um banco `testing_test_N` por processo, abaixo); `Tests\TestCase` aborta qualquer outra conexão antes das migrations. Arquivos em `tests/Feature/PointJustifications/`, `ManualPointRegistrarTest` e `EmployeePointsEditTest`. A concorrência é testada com processos PHP reais (`tests/Support/register-justification.php`, `DatabaseTruncation`) que largam no mesmo instante e atrasam a gravação dentro da transação: registro, edições simultâneas da mesma versão, cancelamentos simultâneos e edição contra cancelamento. Sem os bloqueios, esses testes falham.
+MySQL 8 no banco `testing` (no modo paralelo, um banco `testing_test_N` por processo, abaixo); `Tests\TestCase` aborta qualquer outra conexão antes das migrations. O MariaDB (driver `mariadb`, usado no servidor) também é aceito, para rodar a suíte contra ele. Arquivos em `tests/Feature/PointJustifications/`, `ManualPointRegistrarTest` e `EmployeePointsEditTest`. A concorrência é testada com processos PHP reais (`tests/Support/register-justification.php`, `DatabaseTruncation`) que largam no mesmo instante e atrasam a gravação dentro da transação: registro, edições simultâneas da mesma versão, cancelamentos simultâneos e edição contra cancelamento. Sem os bloqueios, esses testes falham.
 
 **Execução paralela e testes de concorrência real:**
 - Os testes rodam com Pest, isolados ou com `--parallel`. No modo paralelo, o Laravel (`TestDatabases`) troca o banco de cada processo por `testing_test_N`, em que N é o token do processo (`ParallelTesting::token()`).

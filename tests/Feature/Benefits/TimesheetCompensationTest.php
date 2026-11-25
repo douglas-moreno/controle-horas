@@ -28,6 +28,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Livewire\Livewire;
+use Tests\TestCase;
 
 uses(RefreshDatabase::class);
 
@@ -695,7 +696,7 @@ describe('origin preservation and locking', function () {
 
         expect(array_column(array_slice($locks, 0, 2), 'id'))->toBe([$this->origin->id, $this->destination->id]);
 
-        if (DB::getDriverName() === 'mysql') {
+        if (in_array(DB::getDriverName(), TestCase::TEST_DRIVERS, true)) {
             expect(array_column(array_slice($locks, 0, 2), 'for_update'))->toBe([true, true]);
         }
     });

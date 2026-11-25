@@ -95,8 +95,8 @@ class AfdPrecheck
         /** @var Connection $connection */
         $connection = DB::connection();
 
-        if ($connection->getDriverName() !== 'mysql') {
-            throw new DomainException('A pré-validação exige conexão MySQL, para garantir a sessão somente leitura. Nada foi executado.');
+        if (! in_array($connection->getDriverName(), AfdHistoricalCorrection::SUPPORTED_DRIVERS, true)) {
+            throw new DomainException('A pré-validação exige conexão MySQL ou MariaDB, para garantir a sessão somente leitura. Nada foi executado.');
         }
 
         if ($connection->transactionLevel() > 0) {

@@ -328,14 +328,21 @@ class TimesheetSnapshotHistory
     }
 
     /**
-     * Rótulos (sem repetição) dos campos alterados.
+     * Rótulos (sem repetição) dos campos alterados, na ordem de `RESULT_FIELD_LABELS`.
+     * A ordem não depende das chaves do JSON gravado: o MySQL reordena as chaves de uma
+     * coluna JSON e o MariaDB preserva a ordem de gravação.
      *
      * @param  list<string>  $fields
      * @return list<string>
      */
     public static function fieldLabels(array $fields): array
     {
-        return collect($fields)->map(fn (string $field) => self::RESULT_FIELD_LABELS[$field] ?? 'Outros dados do dia')->unique()->values()->all();
+        $positions = array_flip(array_keys(self::RESULT_FIELD_LABELS));
+
+        return collect($fields)
+            ->sortBy(fn (string $field) => $positions[$field] ?? PHP_INT_MAX)
+            ->map(fn (string $field) => self::RESULT_FIELD_LABELS[$field] ?? 'Outros dados do dia')
+            ->unique()->values()->all();
     }
 
     /**

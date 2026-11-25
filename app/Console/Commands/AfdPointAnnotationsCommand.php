@@ -24,7 +24,7 @@ use LogicException;
     {--afd= : Arquivo AFD do manifesto}
     {--operator= : Responsável pela operação (obrigatório em apply)}
     {--expect-host= : @@hostname esperado do banco (apply)}
-    {--expect-server-uuid= : @@server_uuid esperado do banco (apply)}
+    {--expect-server-uuid= : @@server_uuid (MySQL) ou @@server_uid (MariaDB) esperado do banco (apply)}
     {--expect-database= : Nome esperado do banco (apply)}')]
 #[Description('Anotações do RH sobre pontos importados do AFD: simulação e gravação')]
 class AfdPointAnnotationsCommand extends Command
