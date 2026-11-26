@@ -182,7 +182,9 @@ describe('overtime screen and print (D9)', function () {
             ->assertViewHas('timesheets', fn ($timesheets) => Arr::except($timesheets->sole()['days'][0], ['alternative', 'day_type', 'status']) == Arr::except($day, ['day_type', 'status'])
                 && $timesheets->sole()['totals']['delay_minutes'] === $screen->get('totalDelayMinutes')
                 && $timesheets->sole()['totals']['allowed_delay_minutes'] === $screen->get('totalAllowedDelayMinutes'))
-            ->assertSeeInOrder(['00:45', 'bruto 01:25', 'abon. 00:40'], false)
+            ->assertSee('00:45')
+            ->assertDontSee('bruto 01:25<br>abon. 00:40', false)
+            ->assertDontSee('class="allowance"', false)
             ->assertSee('Abonado — Consulta médica, 07:30–08:00: 00:30 · Abonado — Consulta médica, 17:00–17:30: 00:10')
             ->assertSee('Atraso bruto 01:25 · abonado 00:40 · líquido 00:45')
             ->assertSee('atraso bruto menos os minutos abonados');

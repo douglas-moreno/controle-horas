@@ -27,7 +27,6 @@
         td.minutes { width: 46px; }
         td.occurrence { text-align: left; width: 150px; font-size: 10px; }
         td.justification { text-align: left; font-size: 9px; }
-        .allowance { font-size: 8px; line-height: 1.1; }
         td.check { width: 16px; }
         td.signature { width: 70px; }
         tr.highlighted td { background: #f3f4f6; }
@@ -124,9 +123,6 @@
                             <td class="minutes">{{ $day['overtime_minutes'] > 0 ? $day['overtime'] : '' }}</td>
                             <td class="minutes">
                                 {{ $day['delay_minutes'] || ($day['allowed_delay_minutes'] ?? 0) > 0 ? $day['delay'] : '' }}
-                                @if (($day['allowed_delay_minutes'] ?? 0) > 0)
-                                    <div class="allowance">bruto {{ $day['delay_before_allowance'] }}<br>abon. {{ $day['allowed_delay'] }}</div>
-                                @endif
                             </td>
                             <td class="occurrence">
                                 @if ($day['holiday'])

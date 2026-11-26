@@ -27,7 +27,6 @@
         td.justification { text-align: left; font-size: 9px; }
         td.version { width: 34px; }
         td.later { text-align: left; width: 170px; font-size: 9px; }
-        .allowance { font-size: 8px; line-height: 1.1; }
         tr.highlighted td { background: #f3f4f6; }
         tr.totals td { font-weight: bold; }
         .integrity { font-weight: bold; }
@@ -121,9 +120,6 @@
                         <td class="minutes">{{ ($result['overtime_minutes'] ?? 0) > 0 ? ($result['overtime'] ?? '') : '' }}</td>
                         <td class="minutes">
                             {{ ($result['delay_minutes'] ?? 0) || ($result['allowed_delay_minutes'] ?? 0) > 0 ? ($result['delay'] ?? '') : '' }}
-                            @if (($result['allowed_delay_minutes'] ?? 0) > 0)
-                                <div class="allowance">bruto {{ $result['delay_before_allowance'] ?? '' }}<br>abon. {{ $result['allowed_delay'] ?? '' }}</div>
-                            @endif
                         </td>
                         <td class="occurrence">
                             @if (! empty($result['holiday']))
